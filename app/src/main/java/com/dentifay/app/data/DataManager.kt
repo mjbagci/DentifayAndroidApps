@@ -8,7 +8,10 @@ import androidx.compose.ui.graphics.Color
 import com.dentifay.app.core.APIAppointment
 import com.dentifay.app.core.APIInventoryItem
 import com.dentifay.app.core.ApiClient
+import com.dentifay.app.core.HekimSecici
 import com.dentifay.app.core.InventoryStats
+import com.dentifay.app.core.TakvimHekimleri
+import com.dentifay.app.core.Yetki
 import com.dentifay.app.core.Unvan
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.hex
@@ -27,6 +30,7 @@ val LocalDataManager = staticCompositionLocalOf { DataManager() }
 
 class DataManager {
     var appointments by mutableStateOf<List<Appointment>>(emptyList())
+    /** Seçili günün hekimleri: önce açık sütunlar, sonra o gün kapalı olanlar (`kapali`). */
     var doctors by mutableStateOf<List<Doctor>>(emptyList())
     var stockItems by mutableStateOf<List<StockItem>>(emptyList())
     var isLoadingAppointments by mutableStateOf(false)
@@ -87,16 +91,24 @@ class DataManager {
         }
 
         fun parseIso(s: String): Instant? = runCatching { Instant.parse(s) }.getOrNull()
+
+        /** Saf dönüşüm (test edilebilir): açıklar önce, kapalılar sonra; renk sırayla. */
+        fun doktorlar(yanit: TakvimHekimleri, renkler: List<Color>): List<Doctor> =
+            HekimSecici.liste(yanit).mapIndexed { index, satir ->
+                val color = if (renkler.isEmpty()) DS.Colors.cyan400 else renkler[index % renkler.size]
+                val name = Unvan.hekimAdi(satir.uye.user.name)
+                Doctor(name, color, initials(name), satir.uye.userId, kapali = satir.kapali)
+            }
     }
 
     // MARK: - Preload
 
-    /** Önce hekimler (ilk randevu isteği tek hekime daraltılır), sonra stok + randevular paralel. */
-    suspend fun preloadHomeData() {
-        fetchDoctors()
+    /** Önce hekimler (ilk randevu isteği tek hekime — hekimse kendisine — daraltılır), sonra stok + randevular paralel. */
+    suspend fun preloadHomeData(kendiId: String? = null) {
+        fetchDoctors(LocalDate.now())
         coroutineScope {
             val inv = async { fetchInventory() }
-            val firstDoctorId = doctors.firstOrNull()?.apiUserId
+            val firstDoctorId = HekimSecici.korunanSecim(null, doctors, kendiId)
             val appts = firstDoctorId?.let { id -> async { fetchAppointments(LocalDate.now(), id) } }
             inv.await(); appts?.await()
         }
@@ -104,29 +116,23 @@ class DataManager {
 
     // MARK: - Doctors
 
-    suspend fun fetchDoctors() {
+    /**
+     * Ana ekranın hekim seçicisi: SEÇİLİ günün takvim sütunları (`?date=`). İstemci rol süzgeci YOK — sahibi hekim olan
+     * muayenehanede de liste dolar; küme sunucunundur (D12-17).
+     */
+    suspend fun fetchDoctors(date: LocalDate) {
         isLoadingDoctors = true
         try {
-            val apiDoctors = ApiClient.fetchDoctors()
-            doctors = apiDoctors.filter { it.role == "DOCTOR" }.mapIndexed { index, member ->
-                val color = doctorColors[index % doctorColors.size]
-                val name = Unvan.dt(member.user.name ?: "")
-                Doctor(name, specialtyForDoctor(name), color, initials(name), member.userId)
-            }
+            val yanit = ApiClient.fetchScheduleDoctors(dateFormatter.format(date))
+            doctors = doktorlar(yanit, doctorColors)
         } catch (e: CancellationException) {
+            isLoadingDoctors = false
             throw e
         } catch (e: Exception) {
-            errorMessage = e.message
+            // Kodsuz 403 (yetki reddi) hata değildir: parça boş kalır (M-E7.5).
+            if (!Yetki.reddiMi(e)) errorMessage = e.message
         }
         isLoadingDoctors = false
-    }
-
-    private fun specialtyForDoctor(name: String): String = when {
-        name.contains("Ayşe") -> "PROSTHO"
-        name.contains("Ali") -> "ORTHO"
-        name.contains("Mehmet") -> "SURGEON"
-        name.contains("Deniz") -> "ENDO"
-        else -> "GENERAL"
     }
 
     // MARK: - Appointments
@@ -146,9 +152,10 @@ class DataManager {
             val apiAppts = ApiClient.fetchAppointments(dateFormatter.format(date), dateFormatter.format(date.plusDays(1)), doctorUserId)
             appointments = apiAppts.mapNotNull { convertAppointment(it) }.sortedBy { it.startHour * 60 + it.startMinute }
         } catch (e: CancellationException) {
+            isLoadingAppointments = false
             throw e
         } catch (e: Exception) {
-            errorMessage = e.message
+            if (!Yetki.reddiMi(e)) errorMessage = e.message
         }
         isLoadingAppointments = false
     }
@@ -169,7 +176,8 @@ class DataManager {
             else -> "İsimsiz hasta"
         }
 
-        val doctorName = Unvan.dt(api.doctor?.name ?: "—")
+        val hekim = Unvan.hekimAdi(api.doctor?.name)
+        val doctorName = hekim.ifEmpty { "—" }
         val appointmentType = api.appointmentType ?: "TREATMENT"
         val icon = typeIcons[appointmentType] ?: "cross.case.fill"
         val status = (api.status ?: "").uppercase()
@@ -187,14 +195,7 @@ class DataManager {
             else -> "Planlandı"
         }
 
-        val treatmentLabel = when (appointmentType) {
-            "TREATMENT" -> "Tedavi"
-            "CONSULTATION" -> "Konsültasyon"
-            "CONTROL" -> "Kontrol"
-            "SURGERY" -> "Cerrahi"
-            "EMERGENCY" -> "Acil"
-            else -> appointmentType
-        }
+        val treatmentLabel = randevuTuruEtiketi(appointmentType)
 
         return Appointment(
             patientName = patientName,
@@ -236,8 +237,14 @@ class DataManager {
             isLoadingStock = false
             throw e
         } catch (e: Exception) {
-            stockLoadFailed = true
-            errorMessage = e.message
+            if (Yetki.reddiMi(e)) {
+                // Kodsuz 403: kırmızı "yüklenemedi · tekrar dene" kartı yok — boş durum (M-E7.5).
+                stockLoadFailed = false
+                hasLoadedStock = true
+            } else {
+                stockLoadFailed = true
+                errorMessage = e.message
+            }
         }
         isLoadingStock = false
     }

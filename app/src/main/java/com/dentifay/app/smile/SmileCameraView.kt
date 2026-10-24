@@ -2,7 +2,10 @@ package com.dentifay.app.smile
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.camera.core.Preview
 import androidx.camera.view.PreviewView
@@ -20,16 +23,26 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -39,7 +52,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -51,11 +63,13 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +85,8 @@ import com.dentifay.app.theme.Motion
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.pressable
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.LocalPencere
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -81,12 +97,32 @@ import kotlin.math.roundToInt
  * Rehberli gülüş çekimi: canlı yüz takibiyle hekimi yönlendirir; yüz önden,
  * yakın, düz, dişler görünür ve ışık yeterliyken otomatik çeker. Böylece
  * ağız (maske) bölgesi her fotoğrafta güvenle seçilebilir.
+ *
+ * Tablet / katlanabilir yatay tutulduğunda (etkinlik yeniden kurulmaz): kamera kullanım durumları ekran dönüşüyle
+ * hizalanır, rehber oval pencereye sığar ve yönerge + deklanşör sağdaki sütuna geçer (telefon dikey kilitli).
  */
 @Composable
 fun SmileCameraView(onCapture: (Bitmap) -> Unit, onDismiss: () -> Unit) {
     val camera = remember { SmileCameraController() }
     val flash = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
+    val view = LocalView.current
+    val pencere = LocalPencere.current
+    val yatay = pencere.yatay
+
+    // Ekran dönüşünü izle: önizleme / analiz / çekim yönü (180° dönüş de yakalanır — yön değişmeden ekran döner).
+    DisposableEffect(view) {
+        val dm = view.context.getSystemService(DisplayManager::class.java)
+        fun uygula() { view.display?.rotation?.let { camera.setTargetRotation(it) } }
+        val dinleyici = object : DisplayManager.DisplayListener {
+            override fun onDisplayChanged(displayId: Int) { uygula() }
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+        }
+        uygula()
+        dm?.registerDisplayListener(dinleyici, Handler(Looper.getMainLooper()))
+        onDispose { dm?.unregisterDisplayListener(dinleyici) }
+    }
 
     LaunchedEffect(Unit) {
         camera.start(onPhoto = { image ->
@@ -111,17 +147,41 @@ fun SmileCameraView(onCapture: (Bitmap) -> Unit, onDismiss: () -> Unit) {
                 CameraPreview(camera.session, Modifier.fillMaxSize())
                 val density = LocalDensity.current
                 val size = with(density) { Size(maxWidth.toPx(), maxHeight.toPx()) }
-                GuideLayer(camera, size)
+                // Rehber ovalinin serbest alanı: üst çubuk + alt panel (dikey) ya da sağ sütun (yatay) hariç.
+                val alan = with(density) {
+                    if (yatay) Rect(0f, 64.dp.toPx(), size.width - YATAY_PANEL.toPx(), size.height - 16.dp.toPx())
+                    else Rect(0f, 0f, size.width, size.height)
+                }
+                GuideLayer(camera, size, alan, yatay)
             }
         }
 
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+        ) {
             CameraTopBar(camera, onDismiss)
-            Spacer(Modifier.weight(1f))
-            if (camera.status == SmileCameraController.Status.running) BottomPanel(camera)
+            if (yatay) {
+                // Yatay: yönerge, kontrol listesi ve deklanşör sağda dikey sütunda (önizleme alanı serbest kalır).
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    Spacer(Modifier.weight(1f))
+                    if (camera.status == SmileCameraController.Status.running) {
+                        Box(Modifier.width(YATAY_PANEL).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            BottomPanel(camera, Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 12.dp), wrapChecklist = true)
+                        }
+                    }
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+                if (camera.status == SmileCameraController.Status.running) BottomPanel(camera)
+            }
         }
 
-        Box(Modifier.fillMaxSize().alpha(flash.value).background(Color.White))
+        // Flaş: değer yalnız katmanda okunur.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = flash.value }.background(Color.White))
     }
 }
 
@@ -187,13 +247,35 @@ private fun CameraCircleButton(icon: String, label: String, onClick: () -> Unit)
 
 // MARK: - Rehber katmanı
 
+/** Yatay pencerede sağdaki yönerge + deklanşör sütununun genişliği. */
+private val YATAY_PANEL = 300.dp
+
+/**
+ * Rehber ovali: dikeyde Swift'teki oranlar (genişliğin %72'si, üstten %16); yatayda serbest alanın yüksekliğine
+ * sığdırılır ve ortalanır (oval pencereden taşmaz).
+ */
+private fun guideOval(size: Size, alan: Rect, yatay: Boolean): Rect {
+    if (!yatay) {
+        val w = size.width * 0.72f
+        val h = w / 0.74f
+        // Kısa pencerede (bölünmüş ekran) taşmasın: gerekirse yüksekliğe sığdır.
+        return if (size.height * 0.16f + h <= size.height * 0.8f || h <= 0f) {
+            Rect(Offset(size.width * 0.14f, size.height * 0.16f), Size(w, h))
+        } else {
+            val hh = size.height * 0.6f
+            val ww = hh * 0.74f
+            Rect(Offset((size.width - ww) / 2, size.height * 0.12f), Size(ww, hh))
+        }
+    }
+    val h = min(alan.height * 0.92f, (alan.width * 0.8f) / 0.74f)
+    val w = h * 0.74f
+    return Rect(Offset(alan.left + (alan.width - w) / 2, alan.top + (alan.height - h) / 2), Size(w, h))
+}
+
 @Composable
-private fun GuideLayer(camera: SmileCameraController, size: Size) {
+private fun GuideLayer(camera: SmileCameraController, size: Size, alan: Rect, yatay: Boolean) {
     val ready = camera.guide.isReady
-    val oval = Rect(
-        offset = Offset(size.width * 0.14f, size.height * 0.16f),
-        size = Size(size.width * 0.72f, size.width * 0.72f / 0.74f),
-    )
+    val oval = remember(size, alan, yatay) { guideOval(size, alan, yatay) }
     val ovalColor by animateColorAsState(if (ready) DS.Colors.tertiaryContainer else Color.White.copy(alpha = 0.8f), Motion.easeInOut(250), label = "ovalColor")
     val ovalWidth by animateDpAsState(if (ready) 4.dp else 2.dp, Motion.easeInOut(250), label = "ovalWidth")
     val dashAlpha by animateFloatAsState(if (ready) 0f else 1f, Motion.easeInOut(250), label = "ovalDash")
@@ -201,7 +283,8 @@ private fun GuideLayer(camera: SmileCameraController, size: Size) {
     // Canlı "yapay zekaya gidecek alan" çerçevesi (gönderilen kırpımla aynı)
     val mouth = camera.guide.mouthRect
     val target = mouth?.let { sentRect(map(it, size, camera.frameSize)) }
-    val animated by animateRectAsState(target ?: Rect.Zero, tween(100, easing = LinearEasing), label = "mouthRect")
+    // Canlı dikdörtgen yalnız çizim/yerleşim aşamasında okunur (her animasyon karesinde yeniden kompozisyon yok).
+    val animated = animateRectAsState(target ?: Rect.Zero, tween(100, easing = LinearEasing), label = "mouthRect")
     val teethOk = camera.guide.passed.contains(SmileCaptureGuide.Check.teeth)
 
     Box(Modifier.fillMaxSize()) {
@@ -227,17 +310,19 @@ private fun GuideLayer(camera: SmileCameraController, size: Size) {
             if (target != null) {
                 val color = if (teethOk) DS.Colors.cyan400 else DS.Colors.orange400
                 val corner = CornerRadius(10.dp.toPx())
-                drawRoundRect(DS.Colors.cyan400.copy(alpha = 0.22f), animated.topLeft, animated.size, corner, style = Stroke(6.dp.toPx()))
-                drawRoundRect(color, animated.topLeft, animated.size, corner, style = Stroke(2.dp.toPx()))
+                val a = animated.value
+                drawRoundRect(DS.Colors.cyan400.copy(alpha = 0.22f), a.topLeft, a.size, corner, style = Stroke(6.dp.toPx()))
+                drawRoundRect(color, a.topLeft, a.size, corner, style = Stroke(2.dp.toPx()))
             }
         }
         if (target != null) {
-            val cx = animated.center.x
-            val cy = animated.top - with(LocalDensity.current) { 12.dp.toPx() }
             Text(
                 "GÖNDERİLEN ALAN",
                 Modifier
                     .layout { m, c ->
+                        val a = animated.value
+                        val cx = a.center.x
+                        val cy = a.top - 12.dp.toPx()
                         val p = m.measure(c.copy(minWidth = 0, minHeight = 0))
                         layout(c.maxWidth, c.maxHeight) { p.place((cx - p.width / 2f).roundToInt(), (cy - p.height / 2f).roundToInt()) }
                     }
@@ -270,9 +355,9 @@ private fun map(r: Rect, size: Size, frame: Size): Rect {
 // MARK: - Alt panel
 
 @Composable
-private fun BottomPanel(camera: SmileCameraController) {
+private fun BottomPanel(camera: SmileCameraController, modifier: Modifier = Modifier, wrapChecklist: Boolean = false) {
     Column(
-        Modifier.fillMaxWidth().padding(bottom = 28.dp),
+        modifier.fillMaxWidth().padding(bottom = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -288,7 +373,7 @@ private fun BottomPanel(camera: SmileCameraController) {
             )
         }
 
-        Checklist(camera)
+        Checklist(camera, wrap = wrapChecklist)
 
         val progress by animateFloatAsState(camera.readyProgress.toFloat(), tween(100, easing = LinearEasing), label = "ready")
         Box(Modifier.size(78.dp), contentAlignment = Alignment.Center) {
@@ -320,26 +405,40 @@ private fun BottomPanel(camera: SmileCameraController) {
 }
 
 @Composable
-private fun Checklist(camera: SmileCameraController) {
+private fun CheckChip(camera: SmileCameraController, c: SmileCaptureGuide.Check) {
+    val ok = camera.guide.passed.contains(c)
+    val fg by animateColorAsState(if (ok) DS.Colors.tertiaryContainer else Color.White.copy(alpha = 0.7f), Motion.easeInOut(200), label = "check")
+    Row(
+        Modifier
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.45f))
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DfyIcon(if (ok) "checkmark.circle.fill" else "circle", size = 10.dp, tint = fg)
+        Text(c.title, style = sys(10, FontWeight.SemiBold), color = fg, maxLines = 1)
+    }
+}
+
+/** `wrap`: dar yan sütunda (yatay tablet) çipler satır satır kayar; dikeyde tek satır, sığmazsa %80'e küçülür. */
+@Composable
+private fun Checklist(camera: SmileCameraController, wrap: Boolean = false) {
+    if (wrap) {
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            SmileCaptureGuide.Check.entries.forEach { c -> CheckChip(camera, c) }
+        }
+        return
+    }
     // `.minimumScaleFactor(0.8)`: sığmazsa satır en fazla %80'e küçülür.
     Layout(
         content = {
             Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SmileCaptureGuide.Check.entries.forEach { c ->
-                    val ok = camera.guide.passed.contains(c)
-                    val fg by animateColorAsState(if (ok) DS.Colors.tertiaryContainer else Color.White.copy(alpha = 0.7f), Motion.easeInOut(200), label = "check")
-                    Row(
-                        Modifier
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.45f))
-                            .padding(horizontal = 6.dp, vertical = 5.dp),
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        DfyIcon(if (ok) "checkmark.circle.fill" else "circle", size = 10.dp, tint = fg)
-                        Text(c.title, style = sys(10, FontWeight.SemiBold), color = fg, maxLines = 1)
-                    }
-                }
+                SmileCaptureGuide.Check.entries.forEach { c -> CheckChip(camera, c) }
             }
         },
         modifier = Modifier.fillMaxWidth(),
@@ -410,4 +509,10 @@ private fun SmileCameraMessagePreview() {
 @Composable
 private fun SmileCameraViewPreview() {
     PreviewEnv { SmileCameraView(onCapture = {}, onDismiss = {}) }
+}
+
+@ComposePreview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun SmileCameraViewTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { SmileCameraView(onCapture = {}, onDismiss = {}) }
 }

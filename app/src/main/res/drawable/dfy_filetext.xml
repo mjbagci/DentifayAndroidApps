@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/FileText.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 8 17 h 8 m -8 -4 h 4 m 1 -10.5 V 3 c 0 2.828 0 4.243 .879 5.121 C 14.757 9 16.172 9 19 9 h .5 m .5 1.657 V 14 c 0 3.771 0 5.657 -1.172 6.828 S 15.771 22 12 22 s -5.657 0 -6.828 -1.172 S 4 17.771 4 14 V 9.456 c 0 -3.245 0 -4.868 .886 -5.967 a 4 4 0 0 1 .603 -.603 C 6.59 2 8.211 2 11.456 2 c .705 0 1.058 0 1.381 .114 q .1 .036 .197 .082 c .31 .148 .559 .397 1.058 .896 l 4.736 4.736 c .579 .578 .867 .868 1.02 1.235 c .152 .368 .152 .776 .152 1.594"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/CalendarClock.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 16 2 v 4 M 8 2 v 4 m 12.899 2 c -.128 -1.3 -.417 -2.175 -1.07 -2.828 C 18.656 4 16.77 4 13 4 h -2 C 7.229 4 5.343 4 4.172 5.172 S 3 8.229 3 12 v 2 c 0 3.771 0 5.657 1.172 6.828 c .808 .809 1.956 1.06 3.828 1.137 M 3 10 h 5"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 16 22 a 6 6 0 1 0 0 -12 a 6 6 0 0 0 0 12"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 16 13 v 3 l 2 1"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

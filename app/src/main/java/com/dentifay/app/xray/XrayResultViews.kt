@@ -2,10 +2,10 @@ package com.dentifay.app.xray
 
 import android.graphics.Bitmap
 import android.provider.Settings
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animate
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateOffsetAsState
@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -40,6 +41,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,6 +78,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -88,7 +92,9 @@ import com.dentifay.app.theme.hex
 import com.dentifay.app.theme.mutedHex
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.icerikGenisligi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -118,6 +124,15 @@ internal fun Modifier.xrayCenterAt(x: Float, y: Float): Modifier = layout { m, _
     layout(0, 0) { p.place((x - p.width / 2f).roundToInt(), (y - p.height / 2f).roundToInt()) }
 }
 
+/** `xrayCenterAt`'in sağlayıcılı hâli: konum yerleşim evresinde okunur (animasyon / sürükleme yeniden kurmaz). */
+internal fun Modifier.xrayCenterAt(position: () -> Offset): Modifier = layout { m, _ ->
+    val p = m.measure(Constraints())
+    layout(0, 0) {
+        val c = position()
+        p.place((c.x - p.width / 2f).roundToInt(), (c.y - p.height / 2f).roundToInt())
+    }
+}
+
 /** Yuvarlak köşeli dikdörtgen çizgisi (+ isteğe bağlı dolgu, kesikli çizgi) — SwiftUI `RoundedRectangle.stroke`. */
 internal fun DrawScope.xrayRoundRect(
     stroke: Color?, lineWidth: Dp, radius: Dp, dash: List<Float>? = null, fill: Color? = null,
@@ -134,10 +149,24 @@ internal fun DrawScope.xrayRoundRect(
 // MARK: - Sonuç tuvali
 
 /**
+ * Tuvalin yakınlaştırma / kaydırma / karşılaştırma durumu. Çağıran tutar: tembel listede tuval görünümden çıkıp geri
+ * gelince (telefon) ya da pencere yatay ↔ dikey değişince (tablet) yakınlaştırma kaybolmasın.
+ */
+@Stable
+class XrayCanvasState {
+    var scale by mutableFloatStateOf(1f)
+    var offset by mutableStateOf(Offset.Zero)
+    var split by mutableFloatStateOf(0.5f)
+}
+
+/**
  * Röntgen + diş kutuları. Web stüdyosuyla aynı çizim dili: öneri kutusu tam çizgi
  * (güven < %65 ise kesikli), yalnız mevcut restorasyon dolgulu, sağlıklı diş soluk kesikli,
  * FDI rozeti sol üstte, öneri etiketi altta. Kıstırarak yakınlaştırma, sürükleyerek gezinme,
  * çift dokunuşla 1×/2,5×. `compare` açıkken ayraç solunda ham görüntü.
+ *
+ * Boyut: görselin en-boy oranında, verilen kısıtlara SIĞAR (telefonda `Modifier.fillMaxWidth()` ile tam genişlik; tablette
+ * bölmenin içinde hem genişliğe hem yüksekliğe sığar). Yakınlaştırma ve kaydırma yalnız katman/çizim evresinde okunur.
  */
 @Composable
 fun XrayResultCanvas(
@@ -151,15 +180,11 @@ fun XrayResultCanvas(
     compare: Boolean = false,
     /** İlk gösterimde bulgulara sırayla kilitlenen nişangâh (web XrayScanOverlay). */
     playLockOn: Boolean = false,
+    state: XrayCanvasState = remember { XrayCanvasState() },
 ) {
     val reduceMotion = rememberReduceMotion()
     val scope = rememberCoroutineScope()
     val bmp = remember(image) { image.asImageBitmap() }
-    var scale by remember { mutableFloatStateOf(1f) }
-    var baseScale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    var baseOffset by remember { mutableStateOf(Offset.Zero) }
-    var split by remember { mutableFloatStateOf(0.5f) }
     var revealed by remember { mutableStateOf(setOf<String>()) }
     var reticleVisible by remember { mutableStateOf(false) }
     val reticle = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
@@ -167,28 +192,27 @@ fun XrayResultCanvas(
     var reticleLocked by remember { mutableStateOf(false) }
     var locking by remember { mutableStateOf(false) }
 
+    // Yakınlaştırma her karede değişir; ekranı yalnız eşik/basamak değişince yeniden kurar.
+    val zoomedIn by remember(state) { derivedStateOf { state.scale >= 1.8f } }
+    val textScale by remember(state) { derivedStateOf { (max(1f, state.scale * 0.7f) * 4).roundToInt() / 4f } }
+
     val aspect = image.width.toFloat() / max(image.height, 1)
-    val zoomedIn = scale >= 1.8f
     val shape = RoundedCornerShape(14.dp)
 
     fun animateTo(targetScale: Float, targetOffset: Offset, ms: Int) {
-        val fromS = scale; val fromO = offset
+        val fromS = state.scale; val fromO = state.offset
         scope.launch {
             animate(0f, 1f, animationSpec = tween(ms, easing = Motion.EaseOut)) { p, _ ->
-                scale = fromS + (targetScale - fromS) * p
-                offset = Offset(fromO.x + (targetOffset.x - fromO.x) * p, fromO.y + (targetOffset.y - fromO.y) * p)
+                state.scale = fromS + (targetScale - fromS) * p
+                state.offset = Offset(fromO.x + (targetOffset.x - fromO.x) * p, fromO.y + (targetOffset.y - fromO.y) * p)
             }
         }
     }
 
-    fun resetZoom(ms: Int) {
-        baseScale = 1f; baseOffset = Offset.Zero
-        animateTo(1f, Offset.Zero, ms)
-    }
+    fun resetZoom(ms: Int) = animateTo(1f, Offset.Zero, ms)
 
     Box(
         modifier
-            .fillMaxWidth()
             .aspectRatio(aspect)
             .clip(shape)
             .border(1.dp, DS.Colors.hairlineStrong, shape),
@@ -198,11 +222,14 @@ fun XrayResultCanvas(
             val h = constraints.maxHeight.toFloat()
             fun rect(r: Rect) = Rect(r.left * w, r.top * h, r.right * w, r.bottom * h)
             fun clamp(o: Offset): Offset {
-                val mx = w * (scale - 1) / 2; val my = h * (scale - 1) / 2
+                val mx = w * (state.scale - 1) / 2; val my = h * (state.scale - 1) / 2
                 return Offset(o.x.coerceIn(-mx, mx), o.y.coerceIn(-my, my))
             }
             val density = LocalDensity.current
             val slop = with(density) { 8.dp.toPx() }
+
+            // Pencere boyutu değişince (döndürme, bölünmüş ekran) kaydırma yeni sınırlara çekilir.
+            LaunchedEffect(w, h) { state.offset = clamp(state.offset) }
 
             // Kilitlenme animasyonu (web XrayScanOverlay "lock" evresi)
             LaunchedEffect(Unit) {
@@ -233,7 +260,7 @@ fun XrayResultCanvas(
                 revealed = findings.map { it.id }.toSet()
                 locking = false
             }
-            val ids = findings.map { it.id }
+            val ids = remember(findings) { findings.map { it.id } }
             var firstIds by remember { mutableStateOf(true) }
             LaunchedEffect(ids) {
                 if (firstIds) { firstIds = false; return@LaunchedEffect }
@@ -259,32 +286,30 @@ fun XrayResultCanvas(
                                     val z = event.calculateZoom()
                                     if (z != 1f) {
                                         pinched = true
-                                        scale = (scale * z).coerceIn(1f, 5f)
-                                        offset = clamp(offset)
+                                        state.scale = (state.scale * z).coerceIn(1f, 5f)
+                                        state.offset = clamp(state.offset)
                                     }
                                     event.changes.forEach { it.consume() }
-                                } else if (scale > 1.01f) {
+                                } else if (state.scale > 1.01f) {
                                     val pan = event.calculatePan()
                                     travel += pan
                                     if (!panning && travel.getDistance() >= slop) panning = true
                                     if (panning) {
-                                        offset = clamp(offset + pan)
+                                        state.offset = clamp(state.offset + pan)
                                         event.changes.forEach { it.consume() }
                                     }
                                 }
                             }
                             if (pinched) {
-                                baseScale = scale
-                                offset = clamp(offset); baseOffset = offset
-                                if (scale <= 1.01f) resetZoom(200)
+                                state.offset = clamp(state.offset)
+                                if (state.scale <= 1.01f) resetZoom(200)
                             }
-                            if (panning) baseOffset = offset
                         }
                     }
                     .pointerInput(Unit) {
                         detectTapGestures(onDoubleTap = {
                             Haptics.selection()
-                            if (scale > 1.01f) resetZoom(250) else { baseScale = 2.5f; animateTo(2.5f, offset, 250) }
+                            if (state.scale > 1.01f) resetZoom(250) else animateTo(2.5f, state.offset, 250)
                         })
                     },
             ) {
@@ -292,8 +317,8 @@ fun XrayResultCanvas(
                     Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            scaleX = scale; scaleY = scale
-                            translationX = offset.x; translationY = offset.y
+                            scaleX = state.scale; scaleY = state.scale
+                            translationX = state.offset.x; translationY = state.offset.y
                         },
                 ) {
                     Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds, filterQuality = FilterQuality.High)
@@ -303,14 +328,14 @@ fun XrayResultCanvas(
                             .fillMaxSize()
                             .then(
                                 if (compare) Modifier.drawWithContent {
-                                    clipRect(left = size.width * split) { this@drawWithContent.drawContent() }
+                                    clipRect(left = size.width * state.split) { this@drawWithContent.drawContent() }
                                 } else Modifier,
                             ),
                     ) {
                         if (showAnatomy) {
                             Canvas(Modifier.fillMaxSize()) {
                                 for ((item, nr) in anatomy) {
-                                    val r = rect(nr)
+                                    val r = Rect(nr.left * size.width, nr.top * size.height, nr.right * size.width, nr.bottom * size.height)
                                     val c = XrayCatalog.color(item.cls, item.color)
                                     xrayRoundRect(c, 1.dp, 4.dp, listOf(4f, 3f), c.copy(alpha = 0.05f), Offset(r.left, r.top), Size(r.width, r.height))
                                 }
@@ -320,7 +345,8 @@ fun XrayResultCanvas(
                             XrayToothBox(
                                 f = f, r = rect(f.rect), selected = selectedID == f.id,
                                 dimmed = selectedID != null && selectedID != f.id,
-                                revealed = f.id in revealed, scale = scale, zoomedIn = zoomedIn,
+                                revealed = f.id in revealed, lineScale = { state.scale },
+                                textScale = textScale, zoomedIn = zoomedIn,
                                 onTap = {
                                     Haptics.selection()
                                     onSelectedIDChange(if (selectedID == f.id) null else f.id)
@@ -328,14 +354,14 @@ fun XrayResultCanvas(
                             )
                         }
                         if (reticleVisible) {
-                            XrayReticle(reticleLocked, Modifier.xrayCenterAt(reticle.value.x, reticle.value.y).graphicsLayer { alpha = reticleAlpha.value })
+                            XrayReticle(reticleLocked, Modifier.xrayCenterAt { reticle.value }.graphicsLayer { alpha = reticleAlpha.value })
                         }
                     }
                 }
             }
 
             if (compare) {
-                XrayCompareHandle(split, w, h) { split = it }
+                XrayCompareHandle({ state.split }, w, h) { state.split = it }
             }
         }
 
@@ -350,15 +376,12 @@ fun XrayResultCanvas(
                 .border(1.dp, DS.Colors.hairlineStrong, RoundedCornerShape(10.dp)),
         ) {
             XrayZoomButton("plus", "Yakınlaştır") {
-                val t = min(5f, scale + 0.75f)
-                baseScale = t
-                animateTo(t, offset, 200)
+                animateTo(min(5f, state.scale + 0.75f), state.offset, 200)
             }
             Box(Modifier.fillMaxWidth().height(0.5.dp).background(DS.Colors.hairlineStrong))
             XrayZoomButton("minus", "Uzaklaştır") {
-                val t = max(1f, scale - 0.75f)
-                baseScale = t
-                if (t <= 1.01f) resetZoom(200) else animateTo(t, offset, 200)
+                val t = max(1f, state.scale - 0.75f)
+                if (t <= 1.01f) resetZoom(200) else animateTo(t, state.offset, 200)
             }
         }
     }
@@ -367,11 +390,11 @@ fun XrayResultCanvas(
 @Composable
 private fun XrayToothBox(
     f: XrayToothFinding, r: Rect, selected: Boolean, dimmed: Boolean, revealed: Boolean,
-    scale: Float, zoomedIn: Boolean, onTap: () -> Unit,
+    lineScale: () -> Float, textScale: Float, zoomedIn: Boolean, onTap: () -> Unit,
 ) {
     val density = LocalDensity.current
     val color = f.color
-    val lw = ((if (selected) 2.4f else 1.6f) / max(1f, scale * 0.8f)).dp
+    val baseLine = if (selected) 2.4f else 1.6f
     val revealAlpha by animateFloatAsState(if (revealed) 1f else 0f, Motion.easeOut(250), label = "reveal")
     val revealScale by animateFloatAsState(if (revealed) 1f else 1.08f, Motion.easeOut(250), label = "revealScale")
     val dimAlpha by animateFloatAsState(if (dimmed) 0.35f else 1f, Motion.easeOut(200), label = "dim")
@@ -380,7 +403,6 @@ private fun XrayToothBox(
     val boxH = with(density) { max(r.height, 6.dp.toPx()).toDp() }
     val rh = with(density) { r.height.toDp() }
     val slate = hex("94a3b8")
-    val textScale = max(1f, scale * 0.7f)
     val top = f.top
 
     Box(
@@ -396,6 +418,8 @@ private fun XrayToothBox(
             }
             .plainClickable(onClick = onTap)
             .drawBehind {
+                // Çizgi kalınlığı yakınlaştırmayla incelir — çizim evresinde okunur.
+                val lw = (baseLine / max(1f, lineScale() * 0.8f)).dp
                 when (f.kind) {
                     XrayToothFinding.Kind.finding ->
                         xrayRoundRect(color, lw, 3.dp, if (f.isHighConfidence) null else listOf(5f, 3f), color.copy(alpha = fillA))
@@ -467,9 +491,9 @@ private fun XrayZoomButton(icon: String, label: String, onClick: () -> Unit) {
 
 // MARK: Karşılaştırma ayracı
 
+/** Ayraç: konumu sağlayıcıdan çizim/yerleşim evresinde okunur (sürüklerken tuval yeniden kurulmaz). */
 @Composable
-private fun XrayCompareHandle(split: Float, w: Float, h: Float, onSplit: (Float) -> Unit) {
-    val x = w * split
+private fun XrayCompareHandle(split: () -> Float, w: Float, h: Float, onSplit: (Float) -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
@@ -489,6 +513,7 @@ private fun XrayCompareHandle(split: Float, w: Float, h: Float, onSplit: (Float)
             },
     ) {
         Canvas(Modifier.fillMaxSize()) {
+            val x = size.width * split()
             val lw = 2.dp.toPx()
             drawRect(
                 Brush.verticalGradient(listOf(DS.Colors.cyan400, DS.Colors.brandViolet), startY = 0f, endY = size.height),
@@ -499,7 +524,7 @@ private fun XrayCompareHandle(split: Float, w: Float, h: Float, onSplit: (Float)
             drawCircle(Color.White.copy(alpha = 0.85f), r - 0.75.dp.toPx(), Offset(x, size.height / 2), style = Stroke(1.5.dp.toPx()))
         }
         val density = LocalDensity.current
-        DfyIcon("arrow.left.and.right", Modifier.xrayCenterAt(x, h / 2), size = 12.dp, tint = Color.White)
+        DfyIcon("arrow.left.and.right", Modifier.xrayCenterAt { Offset(w * split(), h / 2) }, size = 12.dp, tint = Color.White)
         with(density) {
             XrayCompareTag("ÖNCE", Modifier.xrayCenterAt(28.dp.toPx(), h - 16.dp.toPx()))
             XrayCompareTag("BULGULAR", Modifier.xrayCenterAt(w - 42.dp.toPx(), h - 16.dp.toPx()))
@@ -527,7 +552,7 @@ private val scanPath: List<Offset> = listOf(
 
 /**
  * Web `XrayScanOverlay` arama evresi: nişangâh çene kavsini izler. Yalnız görsel ipucu;
- * analiz sunucuda sürer.
+ * analiz sunucuda sürer. Animasyonlar kapalıysa (sistem ayarı) durağan kalır; yalnız ekrandayken döner.
  */
 @Composable
 fun XrayScanningOverlay(modifier: Modifier = Modifier) {
@@ -581,8 +606,16 @@ fun XraySensitivityPicker(value: XraySensitivity, onValueChange: (XraySensitivit
                 Modifier
                     .weight(1f)
                     .clip(segShape)
-                    .background(Color.White.copy(alpha = 0.08f * a))
-                    .border(1.dp, DS.Colors.cyan400.copy(alpha = 0.45f * a), segShape)
+                    .drawBehind {
+                        // Seçim geçişi yalnız çizimi yeniler.
+                        drawRoundRect(Color.White.copy(alpha = 0.08f * a), cornerRadius = CornerRadius(9.dp.toPx()))
+                        drawRoundRect(
+                            DS.Colors.cyan400.copy(alpha = 0.45f * a), cornerRadius = CornerRadius(9.dp.toPx()),
+                            topLeft = Offset(0.5.dp.toPx(), 0.5.dp.toPx()),
+                            size = Size(size.width - 1.dp.toPx(), size.height - 1.dp.toPx()),
+                            style = Stroke(1.dp.toPx()),
+                        )
+                    }
                     .plainClickable {
                         Haptics.selection()
                         onValueChange(s)
@@ -591,8 +624,14 @@ fun XraySensitivityPicker(value: XraySensitivity, onValueChange: (XraySensitivit
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                Text(s.title, style = sys(13, if (on) FontWeight.SemiBold else FontWeight.Medium), color = fg, maxLines = 1)
-                Text("≥%${(s.rawValue * 100).toInt()}", Modifier.graphicsLayer { alpha = 0.7f }, style = sys(10, FontWeight.Medium), color = fg, maxLines = 1)
+                Text(
+                    s.title, style = sys(13, if (on) FontWeight.SemiBold else FontWeight.Medium), color = fg,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "≥%${(s.rawValue * 100).toInt()}", Modifier.graphicsLayer { alpha = 0.7f },
+                    style = sys(10, FontWeight.Medium), color = fg, maxLines = 1,
+                )
             }
         }
     }
@@ -612,8 +651,8 @@ fun XraySummaryPill(value: Int, label: String, color: Color, modifier: Modifier 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(6.dp).background(color, CircleShape))
-        Text("$value", style = sys(13, FontWeight.Bold), color = Color.White)
-        Text(label, style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
+        Text("$value", style = sys(13, FontWeight.Bold), color = Color.White, maxLines = 1)
+        Text(label, style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant, maxLines = 1)
     }
 }
 
@@ -639,13 +678,17 @@ fun XrayToothRow(finding: XrayToothFinding, modifier: Modifier = Modifier, selec
                 .background(if (finding.kind == XrayToothFinding.Kind.healthy) Color.White.copy(alpha = 0.06f) else finding.color.copy(alpha = 0.85f)),
             contentAlignment = Alignment.Center,
         ) {
-            Text("${finding.fdi}", style = sys(14, FontWeight.Bold), color = Color.White)
+            Text("${finding.fdi}", style = sys(14, FontWeight.Bold), color = Color.White, maxLines = 1)
         }
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Diş ${finding.fdi}", style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                Text(finding.quadrant, style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
+                Text("Diş ${finding.fdi}", style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1)
+                Text(
+                    finding.quadrant, Modifier.weight(1f, fill = false),
+                    style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             }
 
             if (finding.recs.isEmpty() && finding.existing.isEmpty() && finding.observations.isEmpty()) {
@@ -661,17 +704,21 @@ fun XrayToothRow(finding: XrayToothFinding, modifier: Modifier = Modifier, selec
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(7.dp).background(rc, CircleShape))
-                        Text(rec.title, style = sys(14, FontWeight.SemiBold), color = Color.White)
+                        // Dar bölmede / büyük yazıda başlık kırpılır, yüzde rozeti ve "olası" hep görünür.
+                        Text(
+                            rec.title, Modifier.weight(1f, fill = false),
+                            style = sys(14, FontWeight.SemiBold), color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
                         Text(
                             "%${(rec.probability * 100).roundToInt()}",
                             Modifier
                                 .clip(RoundedCornerShape(50))
                                 .background(rc.copy(alpha = 0.12f))
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
-                            style = sys(11, FontWeight.Bold).copy(fontFamily = FontFamily.Monospace), color = rc,
+                            style = sys(11, FontWeight.Bold).copy(fontFamily = FontFamily.Monospace), color = rc, maxLines = 1,
                         )
                         if (rec.probability < 0.65) {
-                            Text("olası", style = sys(11, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
+                            Text("olası", style = sys(11, FontWeight.Medium), color = DS.Colors.onSurfaceVariant, maxLines = 1)
                         }
                     }
                     val reason = rec.clinicalReason
@@ -704,7 +751,7 @@ fun FlowChips(items: List<Pair<String, Color>>, modifier: Modifier = Modifier) {
                         .background(c.copy(alpha = 0.12f))
                         .border(1.dp, c.copy(alpha = 0.3f), RoundedCornerShape(50))
                         .padding(horizontal = 8.dp, vertical = 3.dp),
-                    style = sys(11, FontWeight.SemiBold), color = c, maxLines = 1, softWrap = false,
+                    style = sys(11, FontWeight.SemiBold), color = c, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                 )
             }
         },
@@ -733,12 +780,12 @@ fun FlowChips(items: List<Pair<String, Color>>, modifier: Modifier = Modifier) {
 /** Sonuçtaki renk açıklaması (yalnız görünen sınıflar). */
 @Composable
 fun XrayLegend(findings: List<XrayToothFinding>, modifier: Modifier = Modifier) {
-    val recClasses = findings.flatMap { f -> f.recs.map { it.cls } }.distinct()
-    val existing = findings.flatMap { f -> f.existing.map { it.cls } }.distinct()
+    val recClasses = remember(findings) { findings.flatMap { f -> f.recs.map { it.cls } }.distinct() }
+    val existing = remember(findings) { findings.flatMap { f -> f.existing.map { it.cls } }.distinct() }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (recClasses.isNotEmpty()) XrayLegendRow("Öneriler", recClasses)
         if (existing.isNotEmpty()) XrayLegendRow("Mevcut", existing)
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             XrayLegendSample(dashed = false, text = "Yüksek güven")
             XrayLegendSample(dashed = true, text = "Olası (< %65)")
         }
@@ -759,7 +806,7 @@ private fun XrayLegendSample(dashed: Boolean, text: String) {
         Canvas(Modifier.size(14.dp, 10.dp)) {
             xrayRoundRect(DS.Colors.metal, 1.4.dp, 2.dp, if (dashed) listOf(3f, 2f) else null)
         }
-        Text(text, style = sys(11), color = DS.Colors.onSurfaceVariant)
+        Text(text, style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 1)
     }
 }
 
@@ -783,31 +830,43 @@ internal object XrayPreviewData {
             "gap_38" to XrayTooth(fdi = 38, box = listOf(755.0, 190.0, 827.0, 273.0), gapInferred = true),
         ),
     )
+
+    /** Önizlemelerde röntgen yerine koyu gri zemin. */
+    fun image(): Bitmap = Bitmap.createBitmap(1000, 500, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.DKGRAY) }
+}
+
+@Composable
+private fun XrayResultViewsOrnek() {
+    val bmp = remember { XrayPreviewData.image() }
+    var sel by remember { mutableStateOf<String?>(null) }
+    var sens by remember { mutableStateOf(XraySensitivity.low) }
+    val findings = remember(sens) { XrayPreviewData.result.findings(sens.rawValue) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).icerikGenisligi(640.dp).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            XraySummaryPill(4, "diş", DS.Colors.success)
+            XraySummaryPill(2, "öneri", DS.Colors.danger)
+            XraySummaryPill(2, "mevcut", mutedHex("06b6d4"))
+        }
+        XrayResultCanvas(bmp, findings, sel, { sel = it }, Modifier.fillMaxWidth(), anatomy = XrayPreviewData.result.anatomy())
+        Box(Modifier.fillMaxWidth().aspectRatio(2f).background(Color.Black)) { XrayScanningOverlay() }
+        XraySensitivityPicker(sens, { sens = it })
+        findings.forEach { XrayToothRow(it, selected = it.id == sel) }
+        XrayLegend(findings, Modifier.padding(14.dp))
+        Spacer(Modifier.height(20.dp))
+    }
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun XrayResultViewsPreview() {
-    PreviewEnv {
-        val bmp = remember { Bitmap.createBitmap(1000, 500, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.DKGRAY) } }
-        var sel by remember { mutableStateOf<String?>(null) }
-        var sens by remember { mutableStateOf(XraySensitivity.low) }
-        val findings = XrayPreviewData.result.findings(sens.rawValue)
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                XraySummaryPill(4, "diş", DS.Colors.success)
-                XraySummaryPill(2, "öneri", DS.Colors.danger)
-                XraySummaryPill(2, "mevcut", mutedHex("06b6d4"))
-            }
-            XrayResultCanvas(bmp, findings, sel, { sel = it }, anatomy = XrayPreviewData.result.anatomy())
-            Box(Modifier.fillMaxWidth().aspectRatio(2f).background(Color.Black)) { XrayScanningOverlay() }
-            XraySensitivityPicker(sens, { sens = it })
-            findings.forEach { XrayToothRow(it, selected = it.id == sel) }
-            XrayLegend(findings, Modifier.padding(14.dp))
-            Spacer(Modifier.height(20.dp))
-        }
-    }
+    PreviewEnv { XrayResultViewsOrnek() }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun XrayResultViewsTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { XrayResultViewsOrnek() }
 }

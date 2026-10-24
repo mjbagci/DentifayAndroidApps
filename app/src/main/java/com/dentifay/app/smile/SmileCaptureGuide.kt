@@ -137,10 +137,12 @@ class SmileCaptureGuide {
         val rightEye = parts.rightPupil?.let { norm(it) }
         val nose = parts.nose?.let { norm(it) }
 
-        // Mesafe
-        if (faceRect.width < minFaceWidth) {
+        // Mesafe — yüz genişliği karenin KISA kenarına oranlanır: dikey karede bu genişliktir (Swift ile aynı), tablet
+        // yatay tutulduğunda kare yatay gelir ve aynı çekim mesafesi aynı eşiği verir.
+        val faceWidth = b.width / min(fw, fh)
+        if (faceWidth < minFaceWidth) {
             hint = "Biraz yaklaşın"
-        } else if (faceRect.width > maxFaceWidth) {
+        } else if (faceWidth > maxFaceWidth) {
             hint = "Biraz uzaklaşın — yüzün tamamı görünsün"
         } else {
             passed.add(Check.distance)

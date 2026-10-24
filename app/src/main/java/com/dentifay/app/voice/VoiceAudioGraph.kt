@@ -18,8 +18,10 @@ import kotlin.coroutines.resume
  * Tek ses grafiği: `AudioRecord` (VOICE_COMMUNICATION kaynağı + AEC/NS/AGC efektleri) yakalama,
  * tap (buffer geri çağrısı) yönetimi ve TTS oynatıcısı (`MediaPlayer`).
  *
- * TTS bu grafiğin oynatıcısından ve iletişim kullanımıyla (USAGE_VOICE_COMMUNICATION) çalar —
- * böylece AEC'nin referans sinyali olur (barge-in mümkün).
+ * TTS (yalnız Tedavi Planı önizleme özeti) bu grafiğin oynatıcısından çalar; `flush` kuyruğu ve
+ * çalan sesi birlikte keser. Android'de yankı gidermesi kayıt oturumunun efektidir — okuma
+ * asistan kullanımıyla (`USAGE_ASSISTANT`) hoparlörden çalar: sistem iletişim kipine geçilmediği
+ * için sesli arama kullanımı kulaklık hoparlörüne düşebilirdi. Dikte ve okuma aynı anda çalışmaz.
  */
 class VoiceAudioGraph {
 
@@ -83,20 +85,24 @@ class VoiceAudioGraph {
         }, "VoiceAudioGraph").also { it.start() }
     }
 
-    fun stop() {
-        if (running) {
-            running = false
-            thread?.join(300)
-            thread = null
-            record?.let { r ->
-                runCatching { r.stop() }
-                r.release()
-            }
-            record = null
-            effects.forEach { runCatching { it.release() } }
-            effects = emptyList()
-            onBuffer = null
+    /** Kaydı durdurur ve mikrofonu bırakır; TTS oynatıcısına dokunmaz (dikte dinlemiyorken mikrofon tutulmaz). */
+    fun stopCapture() {
+        if (!running) return
+        running = false
+        thread?.join(300)
+        thread = null
+        record?.let { r ->
+            runCatching { r.stop() }
+            r.release()
         }
+        record = null
+        effects.forEach { runCatching { it.release() } }
+        effects = emptyList()
+        onBuffer = null
+    }
+
+    fun stop() {
+        stopCapture()
         flushPlayback()
     }
 
@@ -131,7 +137,7 @@ class VoiceAudioGraph {
         try {
             mp.setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )

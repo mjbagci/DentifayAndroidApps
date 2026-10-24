@@ -37,21 +37,39 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,6 +84,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -77,7 +96,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -88,6 +106,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -103,7 +122,9 @@ import androidx.compose.ui.unit.sp
 import com.dentifay.app.R
 import com.dentifay.app.credit.CreditRequiredCard
 import com.dentifay.app.credit.CreditSheetItem
-import com.dentifay.app.credit.SmileCreditsView
+import com.dentifay.app.credit.KrediEkrani
+import com.dentifay.app.credit.KrediIpucu
+import com.dentifay.app.credit.SmileCreditsStore
 import com.dentifay.app.theme.ActivityHolder
 import com.dentifay.app.theme.ButtonLabel
 import com.dentifay.app.theme.DS
@@ -111,6 +132,7 @@ import com.dentifay.app.theme.DfyIcon
 import com.dentifay.app.theme.DfySheet
 import com.dentifay.app.theme.FullScreenCover
 import com.dentifay.app.theme.Haptics
+import com.dentifay.app.theme.LocalTextStyleOverride
 import com.dentifay.app.theme.Motion
 import com.dentifay.app.theme.PrimaryButton
 import com.dentifay.app.theme.SecondaryButton
@@ -128,7 +150,10 @@ import com.dentifay.app.trial.GuestContactSheet
 import com.dentifay.app.trial.GuestTrialFeature
 import com.dentifay.app.trial.GuestTrialStore
 import com.dentifay.app.trial.TrialQuotaChip
+import com.dentifay.app.ui.LocalPencere
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.icerikGenisligi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -137,19 +162,38 @@ import java.io.FileOutputStream
 import kotlin.math.max
 import kotlin.math.min
 
-
-
 /**
  * Röntgen Analizi ekranı — web "Röntgen Analizi" stüdyosunun mobil karşılığı.
  * Giriş ekranından (`guest`, ücretsiz deneme) ve Analiz Merkezi'nden (`clinic`) açılır.
  * Sunan taraf tam ekran (`FullScreenCover`) içinde gösterir.
+ *
+ * `hasta` + `gorsel` verilirse hasta seçili ve görsel yüklü açılır (hastanın Medya'sından "Röntgen Analizi'nde aç" — M-E8.4).
+ *
+ * Tablet: içerik sütunu 560 / 640 dp ile sınırlı ve ortada; geniş yatay pencerede (≥ 840 dp, ya da kısa yatay bölünmüş
+ * pencere) alan seçimi, önizleme ve sonuçlar İKİ BÖLME olur — görüntü solda, liste/denetimler sağda.
  */
 @Composable
-fun XrayAnalysisView(onDismiss: () -> Unit, mode: XrayAnalysisViewModel.Mode) {
-    val vm = remember { XrayAnalysisViewModel(mode) }
+fun XrayAnalysisView(
+    onDismiss: () -> Unit,
+    mode: XrayAnalysisViewModel.Mode,
+    hasta: XrayAnalysisViewModel.PatientRef? = null,
+    gorsel: ByteArray? = null,
+) {
+    val vm = remember {
+        XrayAnalysisViewModel(mode).apply {
+            if (hasta != null) patient = hasta
+            if (gorsel != null) load(gorsel, XrayAnalysisViewModel.Source.library)
+        }
+    }
+    XrayAnalysisScreen(vm, onDismiss)
+}
+
+@Composable
+private fun XrayAnalysisScreen(vm: XrayAnalysisViewModel, onDismiss: () -> Unit) {
     val trial = GuestTrialStore.shared
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val ikiBolme = ikiBolmeMi(LocalPencere.current)
 
     var showCamera by remember { mutableStateOf(false) }
     var showContact by remember { mutableStateOf(false) }
@@ -193,7 +237,13 @@ fun XrayAnalysisView(onDismiss: () -> Unit, mode: XrayAnalysisViewModel.Mode) {
 
     Box(Modifier.fillMaxSize()) {
         WebBackdrop()
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                // Yatay tutulan cihazda çentik / yan gezinme çubuğu içeriğin üstüne binmesin.
+                .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)),
+        ) {
             XrayTopBar(vm, isGuest, onBack = back, onShowContact = { showContact = true })
             AnimatedContent(
                 targetState = phase,
@@ -210,9 +260,9 @@ fun XrayAnalysisView(onDismiss: () -> Unit, mode: XrayAnalysisViewModel.Mode) {
                         onSample = { vm.loadSample(context) },
                     )
                     Phase.preparing -> XrayProgressContent("Röntgen ayrıştırılıyor…", "Film/ekran bulunuyor, kırpılıyor ve netleştiriliyor")
-                    Phase.adjust -> AdjustContent(vm)
+                    Phase.adjust -> AdjustContent(vm, ikiBolme)
                     Phase.review -> ReviewContent(
-                        vm, isGuest, showOriginal,
+                        vm, isGuest, showOriginal, ikiBolme,
                         onToggleOriginal = { showOriginal = !showOriginal },
                         onRetake = { Haptics.medium(); showCamera = true },
                         onShowContact = { showContact = true },
@@ -220,7 +270,7 @@ fun XrayAnalysisView(onDismiss: () -> Unit, mode: XrayAnalysisViewModel.Mode) {
                     )
                     Phase.analyzing -> AnalyzingContent(vm)
                     Phase.results -> ResultsContent(
-                        vm, isGuest, compare, playLockOn, showExisting,
+                        vm, isGuest, compare, playLockOn, showExisting, ikiBolme,
                         onCompare = { compare = !compare },
                         onLockOnDone = { playLockOn = false },
                         onToggleExisting = { showExisting = !showExisting },
@@ -262,9 +312,15 @@ fun XrayAnalysisView(onDismiss: () -> Unit, mode: XrayAnalysisViewModel.Mode) {
     }
     val cs = creditSheet
     DfySheet(isPresented = cs != null, onDismiss = { creditSheet = null }) { dismiss ->
-        SmileCreditsView(reason = cs?.reason, onDismiss = dismiss)
+        KrediEkrani(reason = cs?.reason, onDismiss = dismiss)
     }
 }
+
+/** Geniş yatay pencere (tablet yatay) ya da kısa yatay pencere (bölünmüş ekran): görüntü solda, denetimler sağda. */
+private fun ikiBolmeMi(p: PencereBilgisi): Boolean = p.yatay && (p.genislik >= 840.dp || (p.genis && p.kisa))
+
+/** Sağ bölmenin genişliği (liste / denetimler). */
+private fun bolmeGenisligi(p: PencereBilgisi): Dp = (p.genislik * 0.36f).coerceIn(340.dp, 460.dp)
 
 /** Analiz sürerken ekran kararmasın (iOS `isIdleTimerDisabled`). */
 private fun keepScreenOn(on: Boolean) {
@@ -276,19 +332,19 @@ private suspend fun readBytes(context: Context, uri: Uri): ByteArray? = withCont
     runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
 }
 
-/** Swift `.frame(maxWidth: N).frame(maxWidth: .infinity)` — ortalanmış en fazla N genişlik. */
-private fun Modifier.maxContentWidth(max: Dp): Modifier =
-    fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).widthIn(max = max).fillMaxWidth()
-
-/** `Label(title, dfy: icon)` — düğme içinde. */
+/** `Label(title, dfy: icon)` — düğme içinde. Büyük yazıda / dar düğmede metin kırpılmaz, "…" ile kısalır; ikon hep görünür. */
 @Composable
 private fun RowScope.XrayButtonLabel(text: String, icon: String) {
     DfyIcon(icon, size = 15.dp, tint = LocalContentColor.current)
     Spacer(Modifier.width(8.dp))
-    ButtonLabel(text)
+    Text(
+        text, Modifier.weight(1f, fill = false),
+        color = LocalContentColor.current, style = LocalTextStyleOverride.current,
+        maxLines = 1, overflow = TextOverflow.Ellipsis,
+    )
 }
 
-/** Alt eylem şeridi: üstte ince çizgi, zemin rengi alt güvenli alana taşar. */
+/** Alt eylem şeridi: üstte ince çizgi, zemin rengi alt güvenli alana taşar. İçerik en çok `maxWidth`, ortada. */
 @Composable
 private fun XrayBottomBar(maxWidth: Dp = 560.dp, content: @Composable ColumnScope.() -> Unit) {
     Column(
@@ -300,7 +356,7 @@ private fun XrayBottomBar(maxWidth: Dp = 560.dp, content: @Composable ColumnScop
     ) {
         Column(
             Modifier
-                .maxContentWidth(maxWidth)
+                .icerikGenisligi(maxWidth)
                 .padding(horizontal = 20.dp)
                 .padding(top = 12.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -314,12 +370,19 @@ private fun XrayDivider() {
     Box(Modifier.fillMaxWidth().height(0.5.dp).background(DS.Colors.hairline))
 }
 
+/** İki bölme arasındaki dikey ince çizgi. */
+@Composable
+private fun XrayPaneDivider() {
+    Box(Modifier.fillMaxHeight().width(1.dp).background(DS.Colors.hairline))
+}
+
 // MARK: - Üst bar
 
 @Composable
 private fun XrayTopBar(vm: XrayAnalysisViewModel, isGuest: Boolean, onBack: () -> Unit, onShowContact: () -> Unit) {
     val phase = vm.phase
     val backMode = phase == Phase.adjust || phase == Phase.review
+    val genis = LocalPencere.current.genis
     Row(
         Modifier
             .fillMaxWidth()
@@ -342,7 +405,7 @@ private fun XrayTopBar(vm: XrayAnalysisViewModel, isGuest: Boolean, onBack: () -
         }
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text("Röntgen Analizi", style = sys(17, FontWeight.Bold), color = Color.White, maxLines = 1)
+            Text("Röntgen Analizi", style = sys(17, FontWeight.Bold), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 subtitle(vm), style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -354,7 +417,7 @@ private fun XrayTopBar(vm: XrayAnalysisViewModel, isGuest: Boolean, onBack: () -
         } else if (p != null) {
             Row(
                 Modifier
-                    .widthIn(max = 150.dp)
+                    .widthIn(max = if (genis) 260.dp else 150.dp)
                     .clip(RoundedCornerShape(50))
                     .background(Color.White.copy(alpha = 0.05f))
                     .border(1.dp, DS.Colors.hairline, RoundedCornerShape(50))
@@ -383,6 +446,7 @@ private fun subtitle(vm: XrayAnalysisViewModel): String = when (vm.phase) {
 
 @Composable
 private fun PickSourceContent(onCamera: () -> Unit, onGallery: () -> Unit, onFile: () -> Unit, onSample: () -> Unit) {
+    val kisa = LocalPencere.current.kisa
     Column(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -392,12 +456,18 @@ private fun PickSourceContent(onCamera: () -> Unit, onGallery: () -> Unit, onFil
         ) {
             Column(
                 Modifier
-                    .maxContentWidth(560.dp)
+                    .icerikGenisligi(560.dp)
                     .padding(horizontal = 20.dp)
                     .padding(top = 4.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                XraySampleHero(Modifier.appear(0.02))
+                // Kısa pencerede (yatay bölünmüş ekran) tanıtım görseli küçülür; oranı korunur.
+                XraySampleHero(
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .then(if (kisa) Modifier.heightIn(max = 150.dp) else Modifier.fillMaxWidth())
+                        .appear(0.02),
+                )
 
                 Column(Modifier.appear(0.06), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Panoramik röntgeni yükleyin", style = sys(24, FontWeight.Bold, tracking = -0.4), color = Color.White)
@@ -432,7 +502,7 @@ private fun PickSourceContent(onCamera: () -> Unit, onGallery: () -> Unit, onFil
                     .align(Alignment.CenterHorizontally)
                     .plainClickable(onClick = onSample)
                     .padding(vertical = 4.dp),
-                style = sys(13), color = DS.Colors.onSurfaceVariant,
+                style = sys(13), color = DS.Colors.onSurfaceVariant, textAlign = TextAlign.Center,
             )
         }
     }
@@ -454,44 +524,78 @@ private fun XrayTipRow(icon: String, text: String) {
 private fun XrayPrivacyNote(text: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
         DfyIcon("lock.shield", size = 14.dp, tint = DS.Colors.success)
-        Text(text, style = sys(12.5), color = DS.Colors.onSurfaceVariant)
+        Text(text, Modifier.weight(1f), style = sys(12.5), color = DS.Colors.onSurfaceVariant)
     }
 }
 
 // MARK: 2 · Alan seçimi
 
 @Composable
-private fun AdjustContent(vm: XrayAnalysisViewModel) {
-    Column(Modifier.fillMaxSize()) {
-        Text(
-            if (vm.needsManualCrop) "Röntgen otomatik bulunamadı. Köşeleri röntgenin kenarlarına sürükleyin."
-            else "Köşeleri röntgenin kenarlarına sürükleyin; seçilen alan düzleştirilir.",
-            Modifier.fillMaxWidth().padding(horizontal = 28.dp),
-            style = sys(13), color = if (vm.needsManualCrop) DS.Colors.warning else DS.Colors.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+private fun AdjustContent(vm: XrayAnalysisViewModel, ikiBolme: Boolean) {
+    val img = vm.originalPreview
+    // Sürükleme her karede köşeyi değiştirir; düğme yalnız geçerlilik değişince yeniden kurulur.
+    val canConfirm by remember(vm) { derivedStateOf { vm.quad.isValid || vm.quad.isFull } }
+    val instruction = if (vm.needsManualCrop) "Röntgen otomatik bulunamadı. Köşeleri röntgenin kenarlarına sürükleyin."
+    else "Köşeleri röntgenin kenarlarına sürükleyin; seçilen alan düzleştirilir."
+    val instructionColor = if (vm.needsManualCrop) DS.Colors.warning else DS.Colors.onSurfaceVariant
 
-        val img = vm.originalImage
-        if (img != null) {
-            XrayRegionEditor(img, vm.quad, { vm.quad = it }, Modifier.weight(1f).fillMaxWidth())
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-
-        Row(
-            Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            XrayToolChip("Otomatik", "viewfinder", enabled = vm.detectedQuad != null) { vm.resetToDetected() }
-            XrayToolChip("Tüm görsel", "arrow.up.left.and.arrow.down.right", enabled = true) { vm.resetToFull() }
-            XrayToolChip("Döndür", "rotate.right", enabled = true) { vm.rotate() }
-        }
-
-        XrayBottomBar {
-            PrimaryButton(onClick = { vm.confirmRegion() }, enabled = vm.quad.isValid || vm.quad.isFull) {
-                XrayButtonLabel("Bu alanı kullan", "checkmark")
+    if (ikiBolme) {
+        val panel = bolmeGenisligi(LocalPencere.current)
+        Row(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxHeight().navigationBarsPadding()) {
+                if (img != null) XrayRegionEditor(img, { vm.quad }, { vm.quad = it }, Modifier.fillMaxSize())
+            }
+            XrayPaneDivider()
+            Column(Modifier.width(panel).fillMaxHeight()) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(instruction, style = sys(13), color = instructionColor)
+                    XrayAdjustTools(vm, Arrangement.spacedBy(8.dp))
+                }
+                XrayBottomBar(maxWidth = panel) {
+                    PrimaryButton(onClick = { vm.confirmRegion() }, enabled = canConfirm) { XrayButtonLabel("Bu alanı kullan", "checkmark") }
+                }
             }
         }
+    } else {
+        Column(Modifier.fillMaxSize()) {
+            Text(
+                instruction,
+                Modifier.icerikGenisligi(560.dp).padding(horizontal = 28.dp),
+                style = sys(13), color = instructionColor, textAlign = TextAlign.Center,
+            )
+
+            if (img != null) {
+                XrayRegionEditor(img, { vm.quad }, { vm.quad = it }, Modifier.weight(1f).fillMaxWidth())
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+
+            XrayAdjustTools(
+                vm, Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 10.dp),
+            )
+
+            XrayBottomBar {
+                PrimaryButton(onClick = { vm.confirmRegion() }, enabled = canConfirm) { XrayButtonLabel("Bu alanı kullan", "checkmark") }
+            }
+        }
+    }
+}
+
+/** "Otomatik · Tüm görsel · Döndür" — dar ekranda / büyük yazıda alt satıra kayar. */
+@Composable
+private fun XrayAdjustTools(vm: XrayAnalysisViewModel, arrangement: Arrangement.Horizontal, modifier: Modifier = Modifier) {
+    FlowRow(modifier, horizontalArrangement = arrangement, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        XrayToolChip("Otomatik", "viewfinder", enabled = vm.detectedQuad != null) { vm.resetToDetected() }
+        XrayToolChip("Tüm görsel", "arrow.up.left.and.arrow.down.right", enabled = true) { vm.resetToFull() }
+        XrayToolChip("Döndür", "rotate.right", enabled = true) { vm.rotate() }
     }
 }
 
@@ -521,126 +625,191 @@ private fun ReviewContent(
     vm: XrayAnalysisViewModel,
     isGuest: Boolean,
     showOriginal: Boolean,
+    ikiBolme: Boolean,
     onToggleOriginal: () -> Unit,
     onRetake: () -> Unit,
     onShowContact: () -> Unit,
     onEditCrop: () -> Unit,
 ) {
-    val trial = GuestTrialStore.shared
-    Column(Modifier.fillMaxSize()) {
-        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Column(
+    // Klavye açıkken (hasta arama) alt çubuk gizlenir: klavyenin üstüne binip arama sonuçlarını örtüyordu.
+    val klavyeAcik = WindowInsets.isImeVisible
+    if (ikiBolme) {
+        val panel = bolmeGenisligi(LocalPencere.current)
+        Row(Modifier.fillMaxSize()) {
+            Box(
                 Modifier
-                    .maxContentWidth(560.dp)
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .navigationBarsPadding()
+                    .padding(20.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                val shown = if (showOriginal) vm.originalImage else vm.preparedImage
-                val targetAspect = shown?.let { it.width.toFloat() / max(it.height, 1) } ?: 2f
-                val aspect by animateFloatAsState(targetAspect, Motion.easeOut(200), label = "aspect")
-                val shape = RoundedCornerShape(14.dp)
-                Box(
+                XrayReviewPreview(vm, showOriginal, Modifier)
+            }
+            XrayPaneDivider()
+            // Klavye açılınca (hasta arama) denetimler klavyenin üstünde kalır; eylem çubuğu klavye kapanınca döner.
+            Column(Modifier.width(panel).fillMaxHeight().imePadding()) {
+                Column(
                     Modifier
+                        .weight(1f)
                         .fillMaxWidth()
-                        .aspectRatio(max(0.2f, aspect))
-                        .clip(shape)
-                        .background(Color.Black)
-                        .border(1.dp, DS.Colors.hairlineStrong, shape),
-                    contentAlignment = Alignment.Center,
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp)
+                        .padding(top = 4.dp, bottom = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
-                    Crossfade(showOriginal, animationSpec = tween(200, easing = Motion.EaseOut), label = "orig") { orig ->
-                        val o = vm.originalImage
-                        val pimg = vm.preparedImage
-                        if (orig && o != null) {
-                            XrayCropPreview(o, vm.quad)
-                        } else if (pimg != null) {
-                            val bmp = remember(pimg) { pimg.asImageBitmap() }
-                            Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit, filterQuality = FilterQuality.High)
-                        } else {
-                            Box(Modifier.fillMaxSize())
-                        }
-                    }
-                    if (vm.isRebuilding) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
-                    if (vm.isPhoto && vm.isAutoCropped && !showOriginal) {
-                        Row(
-                            Modifier
-                                .align(Alignment.TopStart)
-                                .padding(8.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(Color.Black.copy(alpha = 0.6f))
-                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            DfyIcon("Sparkles", size = 11.dp, tint = Color.White)
-                            Text("Otomatik ayrıştırıldı", style = sys(11, FontWeight.SemiBold), color = Color.White)
-                        }
-                    }
+                    XrayReviewControls(vm, isGuest, showOriginal, onToggleOriginal, onRetake)
                 }
-
-                if (vm.isPhoto) {
-                    Row { XrayToggleChip("Orijinal fotoğraf", "eye", showOriginal, onToggleOriginal) }
-                }
-
-                if (vm.quality.hasIssues && !vm.isRebuilding) XrayQualityCard(vm, onRetake)
-
-                Row(
-                    Modifier.fillMaxWidth().glassCard(16.dp).padding(14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Görüntüyü iyileştir", style = sys(15, FontWeight.Medium), color = DS.Colors.onSurface)
-                        Text(
-                            "Parlaklık ve kontrastı dijital röntgen düzeyine getirir — fotoğraflarda önerilir",
-                            style = sys(12), color = DS.Colors.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = vm.enhance,
-                        onCheckedChange = { vm.enhance = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White, checkedTrackColor = DS.Colors.cyan400, checkedBorderColor = Color.Transparent,
-                            uncheckedThumbColor = Color.White, uncheckedTrackColor = Color.White.copy(alpha = 0.16f), uncheckedBorderColor = Color.Transparent,
-                        ),
-                    )
-                }
-
-                if (vm.mode == XrayAnalysisViewModel.Mode.clinic) XrayPatientPicker(vm)
-
-                if (isGuest) {
-                    Row(
-                        Modifier.fillMaxWidth().glassCard(16.dp).padding(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        DfyIcon("gift", size = 16.dp, tint = DS.Colors.cyan400)
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Bu analiz 1 ücretsiz hak kullanır", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                            val rem = trial.remaining(GuestTrialFeature.xray)
-                            Text(
-                                if (rem != null) "Kalan: $rem/${trial.quota(GuestTrialFeature.xray)?.limit ?: trial.limit}. Analiz tamamlanamazsa hak düşülmez."
-                                else "Analiz tamamlanamazsa hak düşülmez.",
-                                style = sys(12.5), color = DS.Colors.onSurfaceVariant,
-                            )
-                        }
-                    }
-                } else {
-                    XrayPrivacyNote("Röntgen hastanın dosyasına kaydedilir; analiz kliniğinizin AI kredisinden düşer (başarısız analizde iade edilir).")
-                }
+                if (!klavyeAcik) XrayBottomBar(maxWidth = panel) { XrayReviewActions(vm, isGuest, onShowContact, onEditCrop) }
             }
         }
-
-        XrayBottomBar {
-            if (isGuest && trial.isExhausted(GuestTrialFeature.xray)) {
-                PrimaryButton(onClick = onShowContact) { XrayButtonLabel("Hakkınız doldu · İletişime geçin", "bubble.left.and.text.bubble.right") }
-            } else {
-                PrimaryButton(onClick = { vm.analyze() }, enabled = vm.canAnalyze) { XrayButtonLabel("Analizi başlat", "play.fill") }
+    } else {
+        Column(Modifier.fillMaxSize().imePadding()) {
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+                Column(
+                    Modifier
+                        .icerikGenisligi(560.dp)
+                        .padding(horizontal = 20.dp)
+                        .padding(bottom = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    XrayReviewPreview(vm, showOriginal, Modifier.fillMaxWidth())
+                    XrayReviewControls(vm, isGuest, showOriginal, onToggleOriginal, onRetake)
+                }
             }
-            SecondaryButton(onClick = onEditCrop, height = 44.dp) { XrayButtonLabel("Kırpmayı düzenle", "scissors") }
+            if (!klavyeAcik) XrayBottomBar { XrayReviewActions(vm, isGuest, onShowContact, onEditCrop) }
         }
     }
+}
+
+/** Hazırlanan röntgen (ya da orijinal fotoğraf + ayrıştırılan alan) — görüntünün en-boy oranında, verilen alana sığar. */
+@Composable
+private fun XrayReviewPreview(vm: XrayAnalysisViewModel, showOriginal: Boolean, modifier: Modifier) {
+    val shown = if (showOriginal) vm.originalPreview else vm.preparedImage
+    val targetAspect = shown?.let { it.width.toFloat() / max(it.height, 1) } ?: 2f
+    val aspect by animateFloatAsState(targetAspect, Motion.easeOut(200), label = "aspect")
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        modifier
+            .aspectRatio(max(0.2f, aspect))
+            .clip(shape)
+            .background(Color.Black)
+            .border(1.dp, DS.Colors.hairlineStrong, shape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Crossfade(showOriginal, animationSpec = tween(200, easing = Motion.EaseOut), label = "orig") { orig ->
+            val o = vm.originalPreview
+            val pimg = vm.preparedImage
+            if (orig && o != null) {
+                XrayCropPreview(o, vm.quad)
+            } else if (pimg != null) {
+                val bmp = remember(pimg) { pimg.asImageBitmap() }
+                Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit, filterQuality = FilterQuality.High)
+            } else {
+                Box(Modifier.fillMaxSize())
+            }
+        }
+        if (vm.isRebuilding) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+        if (vm.isPhoto && vm.isAutoCropped && !showOriginal) {
+            Row(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                DfyIcon("Sparkles", size = 11.dp, tint = Color.White)
+                Text("Otomatik ayrıştırıldı", style = sys(11, FontWeight.SemiBold), color = Color.White, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** Önizlemenin denetimleri (orijinal fotoğraf, kalite uyarısı, iyileştirme, hasta, not) — çağıranın sütununa dizilir. */
+@Composable
+private fun XrayReviewControls(
+    vm: XrayAnalysisViewModel,
+    isGuest: Boolean,
+    showOriginal: Boolean,
+    onToggleOriginal: () -> Unit,
+    onRetake: () -> Unit,
+) {
+    val trial = GuestTrialStore.shared
+    if (vm.isPhoto) {
+        Row { XrayToggleChip("Orijinal fotoğraf", "eye", showOriginal, onToggleOriginal) }
+    }
+
+    if (vm.quality.hasIssues && !vm.isRebuilding) XrayQualityCard(vm, onRetake)
+
+    Row(
+        Modifier.fillMaxWidth().glassCard(16.dp).padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Görüntüyü iyileştir", style = sys(15, FontWeight.Medium), color = DS.Colors.onSurface)
+            Text(
+                "Parlaklık ve kontrastı dijital röntgen düzeyine getirir — fotoğraflarda önerilir",
+                style = sys(12), color = DS.Colors.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = vm.enhance,
+            onCheckedChange = { vm.enhance = it },
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White, checkedTrackColor = DS.Colors.cyan400, checkedBorderColor = Color.Transparent,
+                uncheckedThumbColor = Color.White, uncheckedTrackColor = Color.White.copy(alpha = 0.16f), uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+    }
+
+    if (vm.mode == XrayAnalysisViewModel.Mode.clinic) XrayPatientPicker(vm)
+
+    if (isGuest) {
+        Row(
+            Modifier.fillMaxWidth().glassCard(16.dp).padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            DfyIcon("gift", size = 16.dp, tint = DS.Colors.cyan400)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Bu analiz 1 ücretsiz hak kullanır", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
+                val rem = trial.remaining(GuestTrialFeature.xray)
+                Text(
+                    if (rem != null) "Kalan: $rem/${trial.quota(GuestTrialFeature.xray)?.limit ?: trial.limit}. Analiz tamamlanamazsa hak düşülmez."
+                    else "Analiz tamamlanamazsa hak düşülmez.",
+                    style = sys(12.5), color = DS.Colors.onSurfaceVariant,
+                )
+            }
+        }
+    } else {
+        // Ek MO.25c/d — sayı yazılmaz (kredi sayısı ipucundadır, M-E1.7.8).
+        val demo = SmileCreditsStore.shared.wallet?.isDemo == true
+        XrayPrivacyNote(
+            "Röntgen hastanın dosyasına kaydedilir. " +
+                if (demo) "Analiz demo kredinizden düşer." else "Analiz kliniğinizin kredisinden düşer.",
+        )
+    }
+}
+
+/** Önizlemenin alt eylemleri: analiz (+ kredi ipucu) ya da iletişim, kırpmayı düzenle. */
+@Composable
+private fun XrayReviewActions(vm: XrayAnalysisViewModel, isGuest: Boolean, onShowContact: () -> Unit, onEditCrop: () -> Unit) {
+    val trial = GuestTrialStore.shared
+    if (isGuest && trial.isExhausted(GuestTrialFeature.xray)) {
+        PrimaryButton(onClick = onShowContact) { XrayButtonLabel("Hakkınız doldu · İletişime geçin", "bubble.left.and.text.bubble.right") }
+    } else {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            PrimaryButton(onClick = { vm.analyze() }, modifier = Modifier.weight(1f), enabled = vm.canAnalyze) {
+                XrayButtonLabel("Analizi başlat", "play.fill")
+            }
+            if (!isGuest) KrediIpucu(islem = "xray:analyze")
+        }
+    }
+    SecondaryButton(onClick = onEditCrop, height = 44.dp) { XrayButtonLabel("Kırpmayı düzenle", "scissors") }
 }
 
 /** Bulanık / küçük / parlamalı görüntü uyarısı — yeniden çekim önerir. */
@@ -681,8 +850,11 @@ private fun XrayQualityCard(vm: XrayAnalysisViewModel, onRetake: () -> Unit) {
 
 @Composable
 private fun XrayPatientPicker(vm: XrayAnalysisViewModel) {
+    // Sonuçlar gelince kart görünür alana kayar (klavye açıkken sonuçlar ekranın altında kalıyordu).
+    val gorunurYap = remember { BringIntoViewRequester() }
+    LaunchedEffect(vm.patientResults) { if (vm.patientResults.isNotEmpty()) gorunurYap.bringIntoView() }
     Column(
-        Modifier.fillMaxWidth().glassCard(16.dp).padding(14.dp),
+        Modifier.fillMaxWidth().bringIntoViewRequester(gorunurYap).glassCard(16.dp).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SectionLabel("Hasta")
@@ -691,12 +863,12 @@ private fun XrayPatientPicker(vm: XrayAnalysisViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 DfyIcon("person.crop.circle", size = 22.dp, tint = DS.Colors.metal)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(p.name, style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                    p.subtitle?.let { Text(it, style = sys(12), color = DS.Colors.onSurfaceVariant) }
+                    Text(p.name, style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    p.subtitle?.let { Text(it, style = sys(12), color = DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
                 Text(
                     "Değiştir", Modifier.plainClickable { vm.patient = null },
-                    style = sys(13, FontWeight.SemiBold), color = DS.Colors.cyan400,
+                    style = sys(13, FontWeight.SemiBold), color = DS.Colors.cyan400, maxLines = 1,
                 )
             }
         } else {
@@ -704,7 +876,7 @@ private fun XrayPatientPicker(vm: XrayAnalysisViewModel) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(46.dp)
+                    .heightIn(min = 46.dp)
                     .clip(shape)
                     .background(Color.White.copy(alpha = 0.03f))
                     .border(1.dp, DS.Colors.hairlineStrong, shape)
@@ -715,7 +887,10 @@ private fun XrayPatientPicker(vm: XrayAnalysisViewModel) {
                 DfyIcon("magnifyingglass", size = 17.dp, tint = DS.Colors.metal)
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                     if (vm.patientQuery.isEmpty()) {
-                        Text("Hasta ara (ad, telefon)", style = sys(17), color = DS.Colors.onSurfaceVariant.copy(alpha = 0.6f), maxLines = 1)
+                        Text(
+                            "Hasta ara (ad, telefon)", style = sys(17), color = DS.Colors.onSurfaceVariant.copy(alpha = 0.6f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     BasicTextField(
                         value = vm.patientQuery,
@@ -731,17 +906,23 @@ private fun XrayPatientPicker(vm: XrayAnalysisViewModel) {
             }
 
             for (r in vm.patientResults) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .plainClickable { vm.selectPatient(r) }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(r.name, Modifier.weight(1f), style = sys(15, FontWeight.Medium), color = DS.Colors.onSurface)
-                    r.subtitle?.let { Text(it, style = sys(12), color = DS.Colors.onSurfaceVariant) }
+                key(r.id) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .plainClickable { vm.selectPatient(r) }
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            r.name, Modifier.weight(1f),
+                            style = sys(15, FontWeight.Medium), color = DS.Colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        r.subtitle?.let { Text(it, style = sys(12), color = DS.Colors.onSurfaceVariant, maxLines = 1) }
+                    }
+                    XrayDivider()
                 }
-                XrayDivider()
             }
         }
     }
@@ -751,12 +932,11 @@ private fun XrayPatientPicker(vm: XrayAnalysisViewModel) {
 
 @Composable
 private fun AnalyzingContent(vm: XrayAnalysisViewModel) {
-    Column(
-        Modifier.fillMaxSize().navigationBarsPadding(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    BoxWithConstraints(Modifier.fillMaxSize().navigationBarsPadding()) {
+        // Kısa pencerede metin sığsın diye görüntü yüksekliği sınırlı (oran korunur).
+        val imageCap = maxHeight * 0.55f
         Column(
-            Modifier.maxContentWidth(640.dp).weight(1f),
+            Modifier.fillMaxSize().icerikGenisligi(640.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterVertically),
         ) {
@@ -765,7 +945,7 @@ private fun AnalyzingContent(vm: XrayAnalysisViewModel) {
             Box(
                 Modifier
                     .padding(horizontal = 20.dp)
-                    .fillMaxWidth()
+                    .heightIn(max = imageCap)
                     .aspectRatio(img?.let { it.width.toFloat() / max(it.height, 1) } ?: 2f)
                     .clip(shape)
                     .background(Color.Black)
@@ -773,7 +953,7 @@ private fun AnalyzingContent(vm: XrayAnalysisViewModel) {
             ) {
                 if (img != null) {
                     val bmp = remember(img) { img.asImageBitmap() }
-                    Image(bmp, null, Modifier.fillMaxSize().alpha(0.85f), contentScale = ContentScale.Fit)
+                    Image(bmp, null, Modifier.fillMaxSize().alpha(0.85f), contentScale = ContentScale.Fit, filterQuality = FilterQuality.High)
                 }
                 XrayScanningOverlay()
             }
@@ -781,7 +961,7 @@ private fun AnalyzingContent(vm: XrayAnalysisViewModel) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = DS.Colors.cyan400, strokeWidth = 2.dp)
-                    Text("Dişler analiz ediliyor", style = sys(17, FontWeight.SemiBold), color = Color.White)
+                    Text("Dişler analiz ediliyor", style = sys(17, FontWeight.SemiBold), color = Color.White, maxLines = 1)
                     AnimatedContent(
                         targetState = vm.elapsed.toInt(),
                         transitionSpec = {
@@ -789,7 +969,7 @@ private fun AnalyzingContent(vm: XrayAnalysisViewModel) {
                         },
                         label = "elapsed",
                     ) { s ->
-                        Text("· $s sn", style = sys(15, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
+                        Text("· $s sn", style = sys(15, FontWeight.Medium), color = DS.Colors.onSurfaceVariant, maxLines = 1)
                     }
                 }
                 Text(
@@ -812,165 +992,278 @@ private fun ResultsContent(
     compare: Boolean,
     playLockOn: Boolean,
     showExisting: Boolean,
+    ikiBolme: Boolean,
     onCompare: () -> Unit,
     onLockOnDone: () -> Unit,
     onToggleExisting: () -> Unit,
     onShowContact: () -> Unit,
     onShare: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize()) {
-        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+    val sens = vm.sensitivity
+    val healthy = vm.showHealthy
+    // Swift `.id("\(duyarlılık)-\(sağlıklı)")`: duyarlılık / sağlıklı değişince tuval sıfırdan kurulur. Yakınlaştırma durumu
+    // burada tutulur: tembel listede tuval görünümden çıkıp dönünce ve pencere döndürülünce kaybolmaz.
+    val canvasState = remember(sens, healthy) { XrayCanvasState() }
+    LaunchedEffect(sens, healthy) { delay(3000); onLockOnDone() }
+
+    if (ikiBolme) {
+        val panel = bolmeGenisligi(LocalPencere.current)
+        val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        // Tuvalde diş seçilince seçili diş kartı (sağ listenin başı) görünsün; listeden seçimde liste yerinde kalır.
+        val tuvaldenSec: (String?) -> Unit = { id ->
+            vm.selectedToothID = id
+            if (id != null) scope.launch { listState.animateScrollToItem(0) }
+        }
+        Row(Modifier.fillMaxSize()) {
             Column(
                 Modifier
-                    .maxContentWidth(640.dp)
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .navigationBarsPadding()
+                    .padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    XraySummaryPill(vm.toothCount, "diş", DS.Colors.success)
-                    XraySummaryPill(vm.findingCount, "öneri", DS.Colors.danger)
-                    XraySummaryPill(vm.existingCount, "mevcut", mutedHex("06b6d4"))
-                }
-
-                val img = vm.preparedImage
-                val result = vm.result
-                if (img != null && result != null) {
-                    key(vm.sensitivity.rawValue, vm.showHealthy) {
-                        XrayResultCanvas(
-                            image = img, findings = vm.visibleFindings,
-                            selectedID = vm.selectedToothID,
-                            onSelectedIDChange = { vm.selectedToothID = it },
-                            anatomy = result.anatomy(), showAnatomy = vm.showAnatomy,
-                            compare = compare, playLockOn = playLockOn,
-                        )
-                        LaunchedEffect(Unit) { delay(3000); onLockOnDone() }
-                    }
-                }
-
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    XrayToggleChip("Karşılaştır", "rectangle.split.2x1", compare, onCompare)
-                    XrayToggleChip("Sağlıklı dişler", "circle.dashed", vm.showHealthy) { vm.showHealthy = !vm.showHealthy }
-                    XrayToggleChip("Anatomi", "square.dashed", vm.showAnatomy) { vm.showAnatomy = !vm.showAnatomy }
-                }
-
-                val selected = vm.selectedTooth
-                var lastSelected by remember { mutableStateOf(selected) }
-                if (selected != null) lastSelected = selected
-                AnimatedVisibility(
-                    visible = selected != null,
-                    enter = fadeIn(Motion.easeOut(200)) + slideInVertically(Motion.easeOut(200)) { -it / 3 } + expandVertically(Motion.easeOut(200)),
-                    exit = fadeOut(Motion.easeOut(200)) + slideOutVertically(Motion.easeOut(200)) { -it / 3 } + shrinkVertically(Motion.easeOut(200)),
+                XraySummaryRow(vm, Modifier.fillMaxWidth())
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    lastSelected?.let { XrayToothRow(it, selected = true) }
-                }
-
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SectionLabel("Duyarlılık")
-                    XraySensitivityPicker(vm.sensitivity, { vm.sensitivity = it })
-                    if (vm.suggestsLowerSensitivity) {
-                        val shape = RoundedCornerShape(12.dp)
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(shape)
-                                .background(DS.Colors.warning.copy(alpha = 0.08f))
-                                .border(1.dp, DS.Colors.warning.copy(alpha = 0.28f), shape)
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            DfyIcon("exclamationmark.triangle", size = 17.dp, tint = DS.Colors.warning)
-                            Text(
-                                "Çok az bulgu çıktı. Daha düşük güvenli olasılıkları da görmek ister misiniz?",
-                                Modifier.weight(1f), style = sys(12.5), color = DS.Colors.onSurface,
-                            )
-                            Text(
-                                "Düşür",
-                                Modifier.plainClickable { vm.sensitivity = XraySensitivity.all; Haptics.selection() },
-                                style = sys(13, FontWeight.SemiBold), color = DS.Colors.warning,
-                            )
-                        }
+                    key(sens.rawValue, healthy) {
+                        XrayResultsCanvasBlock(vm, compare, playLockOn, canvasState, Modifier, onSelect = tuvaldenSec)
                     }
                 }
-
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SectionLabel("Bulgular")
-                        Spacer(Modifier.weight(1f))
-                        Text("${vm.findingTeeth.size} dişte öneri", style = sys(12), color = DS.Colors.onSurfaceVariant)
-                    }
-                    if (vm.findingTeeth.isEmpty()) {
-                        Row(
-                            Modifier.fillMaxWidth().glassCard(14.dp).padding(14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            DfyIcon("checkmark.seal", size = 14.dp, tint = DS.Colors.success)
-                            Text("Bu duyarlılıkta tedavi önerisi yok.", style = sys(14, FontWeight.Medium), color = DS.Colors.success)
-                        }
-                    }
-                    for (t in vm.findingTeeth) {
-                        Box(
-                            Modifier.pressable(scale = 0.99f) {
-                                Haptics.selection()
-                                vm.selectedToothID = if (vm.selectedToothID == t.id) null else t.id
-                            },
-                        ) {
-                            XrayToothRow(t, selected = vm.selectedToothID == t.id)
-                        }
+                XrayResultChips(vm, compare, onCompare, Modifier.fillMaxWidth())
+            }
+            XrayPaneDivider()
+            Column(Modifier.width(panel).fillMaxHeight()) {
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    state = listState,
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                ) {
+                    xrayResultsList(
+                        vm, isGuest, showExisting, onToggleExisting, onShowContact,
+                        satir = Modifier.fillMaxWidth().padding(horizontal = 20.dp), ilk = true,
+                    )
+                }
+                XrayBottomBar(maxWidth = panel) { XrayResultActions(vm, onShare) }
+            }
+        }
+    } else {
+        val satir = Modifier.icerikGenisligi(640.dp).padding(horizontal = 20.dp)
+        Column(Modifier.fillMaxSize()) {
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                state = rememberLazyListState(),
+                contentPadding = PaddingValues(bottom = 24.dp),
+            ) {
+                item(key = "ozet") { XraySummaryRow(vm, satir) }
+                if (vm.preparedImage != null && vm.result != null) {
+                    item(key = "tuval-${sens.rawValue}-$healthy", contentType = "tuval") {
+                        XrayResultsCanvasBlock(vm, compare, playLockOn, canvasState, satir.padding(top = 16.dp).fillMaxWidth())
                     }
                 }
+                item(key = "cipler") { XrayResultChips(vm, compare, onCompare, satir.padding(top = 16.dp)) }
+                xrayResultsList(vm, isGuest, showExisting, onToggleExisting, onShowContact, satir = satir)
+            }
+            XrayBottomBar(maxWidth = 640.dp) { XrayResultActions(vm, onShare) }
+        }
+    }
+}
 
-                val existingOnly = vm.findings.filter { it.recs.isEmpty() && it.existing.isNotEmpty() }
-                if (existingOnly.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(Modifier.fillMaxWidth().plainClickable(onClick = onToggleExisting), verticalAlignment = Alignment.CenterVertically) {
-                            SectionLabel("Mevcut restorasyonlar · ${existingOnly.size} diş")
-                            Spacer(Modifier.weight(1f))
-                            DfyIcon(if (showExisting) "chevron.up" else "chevron.down", size = 12.dp, tint = DS.Colors.metal)
-                        }
-                        AnimatedVisibility(
-                            visible = showExisting,
-                            enter = fadeIn(Motion.easeOut(200)) + expandVertically(Motion.easeOut(200)),
-                            exit = fadeOut(Motion.easeOut(200)) + shrinkVertically(Motion.easeOut(200)),
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                for (t in existingOnly) XrayToothRow(t, compact = true)
-                            }
-                        }
-                    }
+/** Diş · öneri · mevcut sayıları — dar ekranda / büyük yazıda alt satıra kayar. */
+@Composable
+private fun XraySummaryRow(vm: XrayAnalysisViewModel, modifier: Modifier) {
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        XraySummaryPill(vm.toothCount, "diş", DS.Colors.success)
+        XraySummaryPill(vm.findingCount, "öneri", DS.Colors.danger)
+        XraySummaryPill(vm.existingCount, "mevcut", mutedHex("06b6d4"))
+    }
+}
+
+@Composable
+private fun XrayResultsCanvasBlock(
+    vm: XrayAnalysisViewModel,
+    compare: Boolean,
+    playLockOn: Boolean,
+    state: XrayCanvasState,
+    modifier: Modifier,
+    onSelect: (String?) -> Unit = { vm.selectedToothID = it },
+) {
+    val img = vm.preparedImage
+    val result = vm.result
+    if (img == null || result == null) return
+    val anatomy = remember(result) { result.anatomy() }
+    XrayResultCanvas(
+        image = img, findings = vm.visibleFindings,
+        selectedID = vm.selectedToothID,
+        onSelectedIDChange = onSelect,
+        modifier = modifier,
+        anatomy = anatomy, showAnatomy = vm.showAnatomy,
+        compare = compare, playLockOn = playLockOn,
+        state = state,
+    )
+}
+
+@Composable
+private fun XrayResultChips(vm: XrayAnalysisViewModel, compare: Boolean, onCompare: () -> Unit, modifier: Modifier) {
+    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        XrayToggleChip("Karşılaştır", "rectangle.split.2x1", compare, onCompare)
+        XrayToggleChip("Sağlıklı dişler", "circle.dashed", vm.showHealthy) { vm.showHealthy = !vm.showHealthy }
+        XrayToggleChip("Anatomi", "square.dashed", vm.showAnatomy) { vm.showAnatomy = !vm.showAnatomy }
+    }
+}
+
+@Composable
+private fun XrayResultActions(vm: XrayAnalysisViewModel, onShare: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        SecondaryButton(onClick = { vm.reset() }, modifier = Modifier.weight(1f)) { XrayButtonLabel("Yeni röntgen", "plus") }
+        PrimaryButton(onClick = onShare, modifier = Modifier.weight(1f)) { XrayButtonLabel("Paylaş", "square.and.arrow.up") }
+    }
+}
+
+/**
+ * Sonuç listesi (tembel): seçili diş · duyarlılık · bulgular · mevcut restorasyonlar · açıklama · not · tanıtım.
+ * Telefonda tuvalin altında, tablette sağ bölmede. Bloklar arası 16, bölüm içi 10 dp (Swift `VStack` aralıkları).
+ */
+private fun LazyListScope.xrayResultsList(
+    vm: XrayAnalysisViewModel,
+    isGuest: Boolean,
+    showExisting: Boolean,
+    onToggleExisting: () -> Unit,
+    onShowContact: () -> Unit,
+    satir: Modifier,
+    ilk: Boolean = false,
+) {
+    item(key = "secili", contentType = "secili") {
+        XraySelectedTooth(vm, satir, topPadding = if (ilk) 4.dp else 16.dp)
+    }
+
+    item(key = "duyarlilik") {
+        Column(satir.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SectionLabel("Duyarlılık")
+            XraySensitivityPicker(vm.sensitivity, { vm.sensitivity = it })
+            if (vm.suggestsLowerSensitivity) {
+                val shape = RoundedCornerShape(12.dp)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(shape)
+                        .background(DS.Colors.warning.copy(alpha = 0.08f))
+                        .border(1.dp, DS.Colors.warning.copy(alpha = 0.28f), shape)
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DfyIcon("exclamationmark.triangle", size = 17.dp, tint = DS.Colors.warning)
+                    Text(
+                        "Çok az bulgu çıktı. Daha düşük güvenli olasılıkları da görmek ister misiniz?",
+                        Modifier.weight(1f), style = sys(12.5), color = DS.Colors.onSurface,
+                    )
+                    Text(
+                        "Düşür",
+                        Modifier.plainClickable { vm.sensitivity = XraySensitivity.all; Haptics.selection() },
+                        style = sys(13, FontWeight.SemiBold), color = DS.Colors.warning, maxLines = 1,
+                    )
                 }
+            }
+        }
+    }
 
-                XrayLegend(vm.findings, Modifier.fillMaxWidth().glassCard(14.dp).padding(14.dp))
+    item(key = "bulgular") {
+        Column(satir.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionLabel("Bulgular")
+                Spacer(Modifier.weight(1f))
+                Text("${vm.findingTeeth.size} dişte öneri", style = sys(12), color = DS.Colors.onSurfaceVariant, maxLines = 1)
+            }
+            if (vm.findingTeeth.isEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().glassCard(14.dp).padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DfyIcon("checkmark.seal", size = 14.dp, tint = DS.Colors.success)
+                    Text("Bu duyarlılıkta tedavi önerisi yok.", Modifier.weight(1f), style = sys(14, FontWeight.Medium), color = DS.Colors.success)
+                }
+            }
+        }
+    }
+    items(vm.findingTeeth, key = { "b-${it.id}" }, contentType = { "dis" }) { t ->
+        Box(
+            satir
+                .padding(top = 10.dp)
+                .pressable(scale = 0.99f) {
+                    Haptics.selection()
+                    vm.selectedToothID = if (vm.selectedToothID == t.id) null else t.id
+                },
+        ) {
+            XrayToothRow(t, selected = vm.selectedToothID == t.id)
+        }
+    }
 
+    val existingOnly = vm.existingOnly
+    if (existingOnly.isNotEmpty()) {
+        item(key = "mevcut") {
+            Row(
+                satir.padding(top = 16.dp).plainClickable(onClick = onToggleExisting),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SectionLabel("Mevcut restorasyonlar · ${existingOnly.size} diş", Modifier.weight(1f))
+                DfyIcon(if (showExisting) "chevron.up" else "chevron.down", size = 12.dp, tint = DS.Colors.metal)
+            }
+        }
+        if (showExisting) {
+            items(existingOnly, key = { "m-${it.id}" }, contentType = { "dis" }) { t ->
+                XrayToothRow(t, satir.padding(top = 10.dp).animateItem(), compact = true)
+            }
+        }
+    }
+
+    item(key = "aciklama") {
+        XrayLegend(vm.findings, satir.padding(top = 16.dp).glassCard(14.dp).padding(14.dp))
+    }
+
+    item(key = "not") {
+        Text(
+            "Sonuçlar ön değerlendirmedir; kesin teşhis ve tedavi kararı hekime aittir.",
+            satir.padding(top = 16.dp),
+            style = sys(12), color = DS.Colors.outline,
+        )
+    }
+
+    if (isGuest) {
+        item(key = "tanitim") {
+            Column(
+                satir.padding(top = 16.dp).glassCard(16.dp).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Kliniğinizde kullanın", style = sys(16, FontWeight.Bold), color = Color.White)
                 Text(
-                    "Sonuçlar ön değerlendirmedir; kesin teşhis ve tedavi kararı hekime aittir.",
-                    style = sys(12), color = DS.Colors.outline,
+                    "Klinik hesabıyla röntgen hasta kartına kaydedilir, bulgulardan fiyatlı tedavi planı taslağı oluşur ve hekim onayına gider.",
+                    style = sys(13), color = DS.Colors.onSurfaceVariant,
                 )
-
-                if (isGuest) {
-                    Column(
-                        Modifier.fillMaxWidth().glassCard(16.dp).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text("Kliniğinizde kullanın", style = sys(16, FontWeight.Bold), color = Color.White)
-                        Text(
-                            "Klinik hesabıyla röntgen hasta kartına kaydedilir, bulgulardan fiyatlı tedavi planı taslağı oluşur ve hekim onayına gider.",
-                            style = sys(13), color = DS.Colors.onSurfaceVariant,
-                        )
-                        SecondaryButton(onClick = onShowContact, height = 44.dp) { XrayButtonLabel("Bizimle iletişime geçin", "arrow.up.right") }
-                    }
-                }
+                SecondaryButton(onClick = onShowContact, height = 44.dp) { XrayButtonLabel("Bizimle iletişime geçin", "arrow.up.right") }
             }
         }
+    }
+}
 
-        XrayBottomBar(maxWidth = 640.dp) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SecondaryButton(onClick = { vm.reset() }, modifier = Modifier.weight(1f)) { XrayButtonLabel("Yeni röntgen", "plus") }
-                PrimaryButton(onClick = onShare, modifier = Modifier.weight(1f)) { XrayButtonLabel("Paylaş", "square.and.arrow.up") }
-            }
-        }
+/** Seçili diş kartı (tuvalde ya da listede seçilince açılır). */
+@Composable
+private fun XraySelectedTooth(vm: XrayAnalysisViewModel, satir: Modifier, topPadding: Dp) {
+    val selected = vm.selectedTooth
+    // Kapanış animasyonu süresince son seçili diş çizilmeye devam etsin (durum değil — yeniden kurulum tetiklemez).
+    val son = remember { arrayOfNulls<XrayToothFinding>(1) }
+    if (selected != null) son[0] = selected
+    AnimatedVisibility(
+        visible = selected != null,
+        modifier = satir,
+        enter = fadeIn(Motion.easeOut(200)) + slideInVertically(Motion.easeOut(200)) { -it / 3 } + expandVertically(Motion.easeOut(200)),
+        exit = fadeOut(Motion.easeOut(200)) + slideOutVertically(Motion.easeOut(200)) { -it / 3 } + shrinkVertically(Motion.easeOut(200)),
+    ) {
+        son[0]?.let { XrayToothRow(it, Modifier.padding(top = topPadding), selected = true) }
     }
 }
 
@@ -986,6 +1279,7 @@ private fun XrayToggleChip(title: String, icon: String, on: Boolean, action: () 
             .background(bg)
             .border(1.dp, border, RoundedCornerShape(50))
             .plainClickable { Haptics.selection(); action() }
+            .semantics { selected = on }   // Swift `.accessibilityAddTraits(on ? .isSelected : [])`
             .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1000,35 +1294,46 @@ private fun XrayToggleChip(title: String, icon: String, on: Boolean, action: () 
 @Composable
 private fun FailedContent(vm: XrayAnalysisViewModel, message: String, onShowContact: () -> Unit, onBuy: (String) -> Unit) {
     val exhausted = vm.isTrialExhaustedError
-    Column(
-        Modifier.fillMaxSize().navigationBarsPadding(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        Spacer(Modifier.weight(1f))
-        DfyIcon(if (exhausted) "lock" else "exclamationmark.triangle", size = 34.dp, tint = if (exhausted) DS.Colors.cyan400 else DS.Colors.warning)
-        Text(
-            message, Modifier.padding(horizontal = 32.dp),
-            style = sys(16, FontWeight.Medium), color = DS.Colors.onSurface, textAlign = TextAlign.Center,
-        )
-        val credit = vm.creditRequired
-        if (credit != null) {
-            CreditRequiredCard(
-                credit = credit, modifier = Modifier.padding(horizontal = 20.dp),
-                onBuy = { onBuy(credit.message) }, onRetry = { vm.retry() },
-            )
-        }
-        Spacer(Modifier.weight(1f))
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val viewport = maxHeight
+        // Kısa pencerede (kredi kartı + düğmeler) kaydırılır; uzunsa ortalı kalır.
         Column(
-            Modifier.maxContentWidth(560.dp).padding(horizontal = 20.dp).padding(bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = viewport)
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            if (exhausted) {
-                PrimaryButton(onClick = onShowContact) { XrayButtonLabel("Bizimle iletişime geçin", "bubble.left.and.text.bubble.right") }
+            Spacer(Modifier.weight(1f))
+            DfyIcon(if (exhausted) "lock" else "exclamationmark.triangle", size = 34.dp, tint = if (exhausted) DS.Colors.cyan400 else DS.Colors.warning)
+            val credit = vm.creditRequired
+            if (credit != null) {
+                // Kredi kartı başlığı ve gerekçeyi zaten söyler; aynı cümle üstte bir daha yazılmaz, "Tekrar dene" alttaki
+                // ana düğmede (kartta ikincisi çizilmez).
+                CreditRequiredCard(
+                    credit = credit, modifier = Modifier.icerikGenisligi(560.dp).padding(horizontal = 20.dp),
+                    onBuy = { onBuy(credit.message) },
+                )
             } else {
-                PrimaryButton(onClick = { vm.retry() }) { XrayButtonLabel("Tekrar dene", "arrow.clockwise") }
+                Text(
+                    message, Modifier.icerikGenisligi(560.dp).padding(horizontal = 32.dp),
+                    style = sys(16, FontWeight.Medium), color = DS.Colors.onSurface, textAlign = TextAlign.Center,
+                )
             }
-            SecondaryButton(onClick = { vm.reset() }, height = 44.dp) { ButtonLabel("Farklı röntgen seç") }
+            Spacer(Modifier.weight(1f))
+            Column(
+                Modifier.icerikGenisligi(560.dp).padding(horizontal = 20.dp).padding(bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (exhausted) {
+                    PrimaryButton(onClick = onShowContact) { XrayButtonLabel("Bizimle iletişime geçin", "bubble.left.and.text.bubble.right") }
+                } else {
+                    PrimaryButton(onClick = { vm.retry() }) { XrayButtonLabel("Tekrar dene", "arrow.clockwise") }
+                }
+                SecondaryButton(onClick = { vm.reset() }, height = 44.dp) { ButtonLabel("Farklı röntgen seç") }
+            }
         }
     }
 }
@@ -1041,8 +1346,11 @@ private fun XrayProgressContent(title: String, detail: String) {
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
     ) {
         CircularProgressIndicator(Modifier.size(24.dp), color = DS.Colors.cyan400, strokeWidth = 2.dp)
-        Text(title, style = sys(16, FontWeight.SemiBold), color = Color.White)
-        Text(detail, Modifier.padding(horizontal = 24.dp), style = sys(13), color = DS.Colors.onSurfaceVariant, textAlign = TextAlign.Center)
+        Text(title, style = sys(16, FontWeight.SemiBold), color = Color.White, textAlign = TextAlign.Center)
+        Text(
+            detail, Modifier.icerikGenisligi(560.dp).padding(horizontal = 24.dp),
+            style = sys(13), color = DS.Colors.onSurfaceVariant, textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -1056,13 +1364,15 @@ private val sampleMarks = listOf(
     XraySampleMark(38, 0.755f, 0.380f, 0.072f, 0.167f, mutedHex("f59e0b"), "20 Yaş %95"),
 )
 
-/** Örnek panoramik + web tanıtım demosundaki üç bulgu (46 · 21 · 38). */
+/**
+ * Örnek panoramik + web tanıtım demosundaki üç bulgu (46 · 21 · 38). Görselin oranında, verilen kısıtlara sığar
+ * (tam genişlik için `Modifier.fillMaxWidth()` verin; kısa pencerede `heightIn(max = …)` ile küçülür).
+ */
 @Composable
 fun XraySampleHero(modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(16.dp)
     BoxWithConstraints(
         modifier
-            .fillMaxWidth()
             .aspectRatio(1582f / 814f)
             .clip(shape)
             .border(1.dp, DS.Colors.hairlineStrong, shape)
@@ -1102,14 +1412,14 @@ fun XraySampleHero(modifier: Modifier = Modifier) {
                 .clip(RoundedCornerShape(50))
                 .background(Color.Black.copy(alpha = 0.6f))
                 .padding(horizontal = 7.dp, vertical = 4.dp),
-            style = sys(9, FontWeight.Bold, tracking = 1), color = Color.White.copy(alpha = 0.85f),
+            style = sys(9, FontWeight.Bold, tracking = 1), color = Color.White.copy(alpha = 0.85f), maxLines = 1,
         )
     }
 }
 
 // MARK: - Paylaşım
 
-/** Paylaşım görseli: röntgen + bulgu kutuları + alt bilgi şeridi. */
+/** Paylaşım görseli: röntgen + bulgu kutuları + alt bilgi şeridi. Arka planda çağrılır. */
 object XrayAnnotatedRenderer {
     fun render(image: Bitmap, findings: List<XrayToothFinding>): Bitmap {
         val maxW = 2000f
@@ -1163,6 +1473,20 @@ object XrayAnnotatedRenderer {
 
 // MARK: - Önizleme
 
+/** Sonuç ekranı örneği (ağsız): örnek röntgen yerine koyu zemin + `XrayPreviewData`. */
+@Composable
+private fun XraySonucOrnek() {
+    val vm = remember {
+        XrayAnalysisViewModel(XrayAnalysisViewModel.Mode.clinic).apply {
+            onizlemeSonucu(
+                XrayPreviewData.image(), XrayPreviewData.result,
+                XrayAnalysisViewModel.PatientRef(id = "p1", name = "Ayşe Yılmaz", subtitle = "0532 000 00 00"),
+            )
+        }
+    }
+    XrayAnalysisScreen(vm, onDismiss = {})
+}
+
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun XrayAnalysisViewPreview() {
@@ -1171,10 +1495,36 @@ private fun XrayAnalysisViewPreview() {
     }
 }
 
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun XrayAnalysisViewTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) {
+        XrayAnalysisView(onDismiss = {}, mode = XrayAnalysisViewModel.Mode.clinic)
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
+@Composable
+private fun XrayResultsPreview() {
+    PreviewEnv { XraySonucOrnek() }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun XrayResultsTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { XraySonucOrnek() }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 800, heightDp = 1280)
+@Composable
+private fun XrayResultsTabletPortraitPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_DIKEY) { XraySonucOrnek() }
+}
+
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 300)
 @Composable
 private fun XraySampleHeroPreview() {
     PreviewEnv {
-        Box(Modifier.padding(20.dp)) { XraySampleHero() }
+        Box(Modifier.padding(20.dp)) { XraySampleHero(Modifier.fillMaxWidth()) }
     }
 }

@@ -35,9 +35,14 @@ import com.dentifay.app.theme.sys
 import com.dentifay.app.theme.upperTr
 import com.dentifay.app.ui.PreviewEnv
 
-/** Stok kalemi kartı: ikon kutusu · ad + durum rozeti · kategori/barkod · stok ve minimum. */
+/**
+ * Stok kalemi kartı: ikon kutusu · ad + durum rozeti · kategori/barkod · stok ve minimum.
+ *
+ * @param esitYukseklik çok sütunlu ızgarada (tablet) kategori/barkod satırı boşken de yeri ayrılır — yan yana kartlar
+ *   aynı yükseklikte kalır. Telefonda (tek sütun) Swift'teki gibi satır hiç çizilmez.
+ */
 @Composable
-fun StockItemCard(item: StockItem, modifier: Modifier = Modifier) {
+fun StockItemCard(item: StockItem, modifier: Modifier = Modifier, esitYukseklik: Boolean = false) {
     val status = item.status
     val stockValueColor = if (status == StockStatus.normal) DS.Colors.onSurface else status.color
 
@@ -69,7 +74,7 @@ fun StockItemCard(item: StockItem, modifier: Modifier = Modifier) {
                 }
 
                 val meta = metaLine(item)
-                if (meta.isNotEmpty()) {
+                if (meta.isNotEmpty() || esitYukseklik) {
                     Text(meta, style = sys(11, FontWeight.Medium), color = DS.Colors.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
 

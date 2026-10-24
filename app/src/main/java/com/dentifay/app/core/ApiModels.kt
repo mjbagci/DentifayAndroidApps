@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import java.text.NumberFormat
 import java.util.Locale
@@ -60,6 +61,21 @@ data class LoginRequest(val email: String, val password: String)
 @Serializable
 data class LoginResponse(val user: APIUser)
 
+/** `GET /api/auth/organizations` → kullanıcının aktif klinikleri. */
+@Serializable
+data class OrganizationsResponse(val organizations: List<APIMembership> = emptyList())
+
+@Serializable
+data class APIMembership(
+    val organizationId: String,
+    val organizationName: String? = null,
+    val branchId: String? = null,
+    val role: String? = null,
+    val current: Boolean? = null,
+) {
+    val id: String get() = organizationId
+}
+
 @Serializable
 data class APIUser(
     val id: String,
@@ -71,7 +87,31 @@ data class APIUser(
     /** Etkin yetenekler ve menü modülleri; eski sunucu göndermezse null → yetki isteyen ekranlar GİZLİ. */
     val capabilities: List<String>? = null,
     val modules: List<String>? = null,
+    /** Kurulumu bitmemiş klinikte `tamamlandi: false` (M-E5.4); alan yoksa (eski sunucu) bugünkü gibi. */
+    val kurulum: KurulumDurumu? = null,
+    /** Paket (M-E8.0; AUTH §15): `webErisimi` Bölüm B'de gelir — alan yoksa `true` sayılır. Paket adı yalnız `ad`dan. */
+    val paket: Paket? = null,
+    /** Kliniğin saat dilimi (IANA, ör. "Europe/Istanbul"). */
+    val timezone: String? = null,
+    /** Geçici şifreyle açılmış ya da şifre değişikliği zorunlu oturum (AUTH §4/§5; M-E8.6). */
+    val mustChangePassword: Boolean? = null,
+    val geciciSifreyle: Boolean? = null,
 ) {
+    @Serializable
+    data class Paket(
+        val id: String? = null,
+        val ad: String? = null,
+        val sinirli: Boolean? = null,
+        val moduller: List<String>? = null,
+        val webErisimi: Boolean? = null,
+    )
+
+    /** Web'e giden bağlantılar çizilsin mi (M-E8.6) — alan yoksa `true`. */
+    val webErisimi: Boolean get() = paket?.webErisimi ?: true
+
+    /** Oturumun yetenek kümesi (arayüz görünürlüğü). */
+    val yetenekler: Set<String> get() = capabilities?.toSet() ?: emptySet()
+
     /** Arayüz kararı içindir (görünürlük); asıl kapı sunucudadır. */
     fun can(capability: String): Boolean = capabilities?.contains(capability) ?: false
 }
@@ -111,6 +151,8 @@ data class APIAppointment(
     val procedureLabel: String? = null,
     val procedureCustomLabel: String? = null,
     val procedureCatalog: APIProcedureCatalogBrief? = null,
+    /** `PATIENT_VISIT` · `MEETING` · `LEAVE` … — hasta dışı kategoriler bugünkü hasta listesinde sayılmaz (M-E8.2). */
+    val category: String? = null,
 ) {
     val isUrgent: Boolean get() = legacyUrgent ?: (urgency?.let { it != "NONE" } ?: false)
     val appointmentType: String? get() = legacyType ?: procedureCustomLabel ?: procedureLabel ?: procedureCatalog?.name
@@ -222,6 +264,8 @@ data class APIPatientWithAppointments(
     val firstName: String,
     val lastName: String,
     val phone: String? = null,
+    /** Dosya no (M-E8.3 başlığı). */
+    val fileNumber: String? = null,
     val email: String? = null,
     val appointments: List<APIPatientAppointmentBrief>? = null,
     val primaryDoctor: APIPrimaryDoctor? = null,
@@ -235,21 +279,37 @@ data class APIPagination(val page: Int, val limit: Int, val total: Int, val page
 
 // MARK: - Bildirimler
 
+/** `GET /api/bildirimler` (sözleşme §5.1) — `kanal` YOK; tek liste. */
 @Serializable
-data class APINotificationList(val items: List<APINotification> = emptyList(), val unread: Int? = null)
+data class APINotificationList(
+    val items: List<APINotification> = emptyList(),
+    val pagination: Sayfalama? = null,
+    val unread: Int? = null,
+    val types: List<String>? = null,
+    val windowDays: Int? = null,
+) {
+    @Serializable
+    data class Sayfalama(val page: Int? = null, val pages: Int? = null, val total: Int? = null)
+}
+
+/** `GET /api/bildirimler/sayac` → `{unread}` (§5.2). */
+@Serializable
+data class APINotificationCount(val unread: Int)
 
 @Serializable
-data class APINotificationCount(val alert: Int = 0, val inbox: Int = 0)
+data class APINotificationReadResult(val ok: Boolean? = null, val okunan: Int? = null, val readAt: String? = null)
 
-@Serializable
-data class APINotificationReadResult(val ok: Boolean? = null)
-
-/** Sunucu satırı METİN taşımaz, veri taşır; başlık/gövde istemcide türden kurulur. */
+/** Sunucu satırı METİN taşımaz, veri taşır; başlık/gövde istemcide türden kurulur (web ile aynı). */
 @Serializable
 data class APINotification(
     val id: String,
-    val channel: String? = null,
     val type: String,
+    val entityType: String? = null,
+    val entityId: String? = null,
+    val targetModule: String? = null,
+    /** Randevu/ödeme olaylarının hekim adı (okuma anında sunucudan). */
+    val doctorName: String? = null,
+    val pricing: Pricing? = null,
     val count: Int? = null,
     val params: Map<String, JsonElement>? = null,
     val patient: Patient? = null,
@@ -261,9 +321,10 @@ data class APINotification(
     val lastEventAt: String? = null,
     val createdAt: String? = null,
 ) {
-    @Serializable data class Patient(val name: String? = null, val archived: Boolean? = null)
+    @Serializable data class Patient(val id: String? = null, val name: String? = null, val fileNumber: String? = null, val archived: Boolean? = null)
     @Serializable data class TaskRef(val title: String? = null)
     @Serializable data class Survey(val question: String? = null, val doctorName: String? = null)
+    @Serializable data class Pricing(val canApprove: Boolean? = null, val patientId: String? = null)
 
     val isUnread: Boolean get() = readAt == null
 
@@ -271,16 +332,33 @@ data class APINotification(
     fun param(key: String): APIFlexibleValue? = params?.get(key)?.let { APIFlexibleValue.from(it) }
 }
 
-/** Sayı ya da metin olabilen JSON değeri (bildirim parametreleri). */
+/** Sayı, metin ya da mantıksal olabilen JSON değeri (bildirim parametreleri). */
 sealed class APIFlexibleValue {
     data class Number(val value: Double) : APIFlexibleValue()
     data class Text(val value: String) : APIFlexibleValue()
+    data class Bool(val value: Boolean) : APIFlexibleValue()
     data object Other : APIFlexibleValue()
+
+    val sayi: Double?
+        get() = when (this) {
+            is Number -> value
+            is Text -> value.toDoubleOrNull()
+            else -> null
+        }
+
+    val dogruMu: Boolean
+        get() = when (this) {
+            is Bool -> value
+            is Text -> value == "true"
+            is Number -> value != 0.0
+            Other -> false
+        }
 
     val display: String?
         get() = when (this) {
             is Number -> NumberFormat.getNumberInstance(Locale.forLanguageTag("tr-TR")).apply { maximumFractionDigits = 2 }.format(value)
             is Text -> value
+            is Bool -> if (value) "true" else "false"
             Other -> null
         }
 
@@ -288,7 +366,10 @@ sealed class APIFlexibleValue {
         fun from(el: JsonElement): APIFlexibleValue {
             val p = el as? JsonPrimitive ?: return Other
             if (p is JsonNull) return Other
-            if (!p.isString) p.doubleOrNull?.let { return Number(it) }
+            if (!p.isString) {
+                p.booleanOrNull?.let { return Bool(it) }
+                p.doubleOrNull?.let { return Number(it) }
+            }
             return if (p.isString) Text(p.content) else Other
         }
     }

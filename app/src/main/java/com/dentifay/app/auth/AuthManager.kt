@@ -8,10 +8,13 @@ import com.dentifay.app.core.APIUser
 import com.dentifay.app.core.ApiClient
 import com.dentifay.app.core.ApiException
 import com.dentifay.app.core.CookieStore
+import com.dentifay.app.core.Kurulum
+import com.dentifay.app.core.SifreOlayi
 import com.dentifay.app.core.Prefs
 import com.dentifay.app.core.SessionEvents
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -24,12 +27,52 @@ class AuthManager {
     var isLoggedIn by mutableStateOf(false)
     var isCheckingSession by mutableStateOf(true)
     var loginError by mutableStateOf<String?>(null)
+    /**
+     * Aktif kliniğin GERÇEK adı (`GET /auth/organizations`). Yüklenemezse null KALIR ve arayüz o satırı ÇİZMEZ —
+     * marka adı UYDURULMAZ.
+     */
+    var organizationName by mutableStateOf<String?>(null)
+    /** Bir uç 403 `E_CLINIC_SETUP_INCOMPLETE` döndü (yarış / eski sürüm) — oturum yeniden okununca temizlenir. */
+    private var kurulumOlayi by mutableStateOf<Boolean?>(null)
+    /** Şifre değişikliği zorunlu (403 `PASSWORD_CHANGE_REQUIRED` geldi) — şifre kaydedilip oturum yeniden okununca temizlenir. */
+    private var sifreOlayi by mutableStateOf(false)
 
     private val scope = MainScope()
 
     init {
         // Oturum herhangi bir istekte düşerse giriş ekranına NEDENİYLE dönülür.
         scope.launch { SessionEvents.ended.collect { code -> sessionEnded(code) } }
+        scope.launch { SifreOlayi.gerekli.collect { if (isLoggedIn) sifreOlayi = true } }
+        scope.launch { Kurulum.tamamlanmadi.collect { yapabilir -> if (isLoggedIn) kurulumOlayi = yapabilir } }
+    }
+
+    /** Olay dinleyicilerini bırakır (uygulamada kök ömür boyunca yaşar; birim testleri ve önizlemeler için). */
+    fun dispose() {
+        scope.cancel()
+    }
+
+    /** "Yeni şifre belirleyin" ekranı gerekiyor mu (M-E8.6): oturumun `mustChangePassword` alanı ya da 403 olayı. */
+    val sifreBelirle: Boolean get() = sifreOlayi || currentUser?.mustChangePassword == true
+
+    /** Kurulumu bitmemiş klinik: bekleme ekranı gerekiyorsa `yapabilir`, gerekmiyorsa null (M-E5.4). */
+    val kurulumBekleme: Boolean? get() = kurulumOlayi ?: Kurulum.bekleme(currentUser?.kurulum)
+
+    /** Oturumun yetenek kümesi (sekme/kart/eylem görünürlüğü — `Yetki`). */
+    val yetenekler: Set<String> get() = currentUser?.yetenekler ?: emptySet()
+
+    /** Şifre kaydedildi — oturumu yeniden oku (AUTH §5: başarıdan sonra `GET /session`). */
+    suspend fun sifreKaydedildi() {
+        sifreOlayi = false
+        currentUser?.let { currentUser = it.copy(mustChangePassword = false, geciciSifreyle = false) }
+        refreshGrants()
+    }
+
+    /** Aktif kliniğin adını çözer. Başarısızsa null bırakır (sessiz, ama SAHTE bir ad da göstermez). */
+    private suspend fun loadOrganizationName() {
+        val orgId = currentUser?.organizationId ?: run { organizationName = null; return }
+        val list = runCatching { ApiClient.fetchOrganizations() }.getOrDefault(emptyList())
+        organizationName = list.firstOrNull { it.organizationId == orgId }?.organizationName
+            ?: list.firstOrNull { it.current == true }?.organizationName
     }
 
     private fun sessionEnded(code: String?) {
@@ -56,6 +99,12 @@ class AuthManager {
 
         fun saveCookies() = CookieStore.save()
         fun restoreCookies() = CookieStore.restore()
+
+        /** Giriş yanıtının `geciciSifreyle` / `mustChangePassword` alanları oturum yanıtında olmayabilir — giriş yanıtındaki korunur. */
+        fun birlestir(giris: APIUser, oturum: APIUser): APIUser = oturum.copy(
+            mustChangePassword = oturum.mustChangePassword ?: giris.mustChangePassword,
+            geciciSifreyle = oturum.geciciSifreyle ?: giris.geciciSifreyle,
+        )
     }
 
     suspend fun checkSession() {
@@ -70,7 +119,9 @@ class AuthManager {
                 ApiClient.checkSession()
             }
             currentUser = resp.user
+            kurulumOlayi = null
             isLoggedIn = true
+            loadOrganizationName()
         } catch (e: ApiException.Unauthorized) {
             isLoggedIn = false
             currentUser = null
@@ -99,7 +150,12 @@ class AuthManager {
         try {
             val resp = ApiClient.login(email, password)
             currentUser = resp.user
+            // M-E8.0: giriş yanıtında `timezone` Bölüm B'den itibaren — oturum ayrıca okunur (alan yoksa giriş yanıtı kalır).
+            runCatching { ApiClient.checkSession() }.getOrNull()?.let { currentUser = birlestir(resp.user, it.user) }
+            kurulumOlayi = null
+            sifreOlayi = false
             isLoggedIn = true
+            loadOrganizationName()
             rememberSession = remember
             if (remember) saveCookies()
         } catch (e: CancellationException) {
@@ -113,6 +169,7 @@ class AuthManager {
         runCatching { ApiClient.logout() }
         CookieStore.clear()
         currentUser = null
+        organizationName = null
         isLoggedIn = false
         rememberSession = false
         CookieStore.clearSaved()

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -21,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,16 +35,16 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.dentifay.app.core.AppConfig
-import com.dentifay.app.core.Unvan
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.Haptics
 import com.dentifay.app.theme.hex
 import com.dentifay.app.theme.sys
 import com.dentifay.app.theme.upperTr
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.icerikGenisligi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -98,10 +98,12 @@ private fun DecimalField(
         singleLine = true,
         textStyle = sys(17).copy(color = if (invalid) DS.Colors.error else DS.Colors.onSurface, textAlign = align),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        cursorBrush = SolidColor(CreditSystemBlue),
+        cursorBrush = SolidColor(CreditVurgu),
         decorationBox = { inner ->
             Box(Modifier.fillMaxWidth(), contentAlignment = if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart) {
-                if (value.isEmpty()) Text(placeholder, Modifier.fillMaxWidth(), style = sys(17).copy(textAlign = align), color = Color.White.copy(alpha = 0.3f))
+                if (value.isEmpty()) {
+                    Text(placeholder, Modifier.fillMaxWidth(), style = sys(17).copy(textAlign = align), color = Color.White.copy(alpha = 0.3f), maxLines = 1)
+                }
                 inner()
             }
         },
@@ -119,44 +121,61 @@ private object CreditInputText {
     }
 }
 
-private const val INVALID_LIMIT = "Kırmızı alanlar 0 ile 1.000.000 arasında, en çok iki ondalıklı olmalı."
+/** Pencere içeriğinin kaydırılan gövdesi (form, tablette okunur genişlikte ortalı). */
+@Composable
+private fun ColumnScope.FormGovdesi(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(top = 16.dp, bottom = 24.dp)
+            .navigationBarsPadding(),
+    ) {
+        Column(Modifier.icerikGenisligi(640.dp), verticalArrangement = Arrangement.spacedBy(32.dp), content = content)
+    }
+}
 
 // MARK: - Limit düzenleyici
 
 /**
- * Kişinin aylık kredi limitleri. Aylık toplam ve özellik başına limit BİRLİKTE uygulanır;
- * boş alan sınırsız, 0 kapalı demektir. Gövde TAM settir (sunucu PUT anlamıyla yazar).
+ * Kişinin aylık kredi limitleri (Ek MO.21s). Özellik listesi SUNUCUDAN; boş = sınırsız, 0 = o işlemi kredili
+ * kullanmak kapalı. Gövde TAM settir; `If-Match` kişinin `limitVersion`ı. 409'da liste yeniden okunur, pencere
+ * açık kalır, sunucunun cümlesi.
  */
 @Composable
 internal fun CcLimitEditorSheet(
     person: CreditPeople.Person,
-    onSave: suspend (Double?, Map<String, Double>) -> Unit,
+    features: List<String>,
+    maxCredits: Double,
+    onSave: suspend (Double?, Map<String, Double?>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var total by remember(person.id) { mutableStateOf(person.limits.total?.let { CreditInputText.make(it) } ?: "") }
-    val features = remember(person.id) {
+    val values = remember(person.id, features) {
         mutableStateMapOf<String, String>().apply {
-            CreditLabels.limitFeatures.forEach { f -> put(f, person.limits.features[f]?.let { CreditInputText.make(it) } ?: "") }
+            features.forEach { f -> put(f, person.limits.features[f]?.let { CreditInputText.make(it) } ?: "") }
         }
     }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    fun isInvalid(s: String) = CreditInput.parse(s) == CreditInput.invalid
+    fun isInvalid(s: String) = CreditInput.parse(s, maxCredits) == CreditInput.invalid
 
     suspend fun save() {
-        val totalValue: Double? = when (val p = CreditInput.parse(total)) {
+        val gecersiz = "Limit 0 ile 1.000.000 kredi arasında, en çok iki ondalık olmalı."
+        val totalValue: Double? = when (val p = CreditInput.parse(total, maxCredits)) {
             CreditInput.empty -> null
             is CreditInput.value -> p.v
-            CreditInput.invalid -> { error = INVALID_LIMIT; return }
+            CreditInput.invalid -> { error = gecersiz; return }
         }
-        val featureValues = mutableMapOf<String, Double>()
-        for (f in CreditLabels.limitFeatures) {
-            when (val p = CreditInput.parse(features[f] ?: "")) {
-                CreditInput.empty -> Unit
+        val featureValues = mutableMapOf<String, Double?>()
+        for (f in features) {
+            when (val p = CreditInput.parse(values[f] ?: "", maxCredits)) {
+                CreditInput.empty -> featureValues[f] = null
                 is CreditInput.value -> featureValues[f] = p.v
-                CreditInput.invalid -> { error = INVALID_LIMIT; return }
+                CreditInput.invalid -> { error = gecersiz; return }
             }
         }
         saving = true
@@ -178,40 +197,30 @@ internal fun CcLimitEditorSheet(
 
     Column(Modifier.fillMaxSize().background(DS.Colors.background)) {
         CreditNavBar(
-            Unvan.dt(person.user.name ?: "Kredi limiti"),
+            "Aylık kredi limiti",
+            subtitle = person.user.displayName,
             leading = { CreditBarButton("Vazgeç") { onDismiss() } },
             trailing = {
                 if (saving) CreditSpinner() else CreditBarButton("Kaydet", bold = true) { scope.launch { save() } }
             },
         )
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(top = 16.dp, bottom = 24.dp)
-                .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(32.dp),
-        ) {
-            FormSection(
-                header = "Aylık toplam (bütün özellikler)",
-                footer = "Bu ay kullanılan: ${creditText(person.usedCredits)} kredi",
-            ) {
+        FormGovdesi {
+            FormSection(header = "Aylık toplam limit (kredi)") {
                 FormRow {
-                    DecimalField(total, { total = it }, "Boş = sınırsız", isInvalid(total), Modifier.fillMaxWidth())
+                    DecimalField(total, { total = it }, "Sınırsız", isInvalid(total), Modifier.fillMaxWidth())
                 }
             }
-            FormSection(header = "Özellik başına") {
-                CreditLabels.limitFeatures.forEachIndexed { i, f ->
+            FormSection(header = "Özellik limitleri (kredi)") {
+                features.forEachIndexed { i, f ->
                     if (i > 0) FormSeparator()
                     FormRow {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(CreditLabels.feature(f), style = sys(17), color = DS.Colors.onSurface)
-                                Text("bu ay ${creditText(person.byFeature[f]?.credits ?: 0.0)}", style = sys(11), color = DS.Colors.onSurfaceVariant)
-                            }
-                            Spacer(Modifier.weight(1f))
-                            val v = features[f] ?: ""
-                            DecimalField(v, { features[f] = it }, "Sınırsız", isInvalid(v), Modifier.width(110.dp), alignEnd = true)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                CreditLabels.feature(f), Modifier.weight(1f),
+                                style = sys(17), color = DS.Colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            )
+                            val v = values[f] ?: ""
+                            DecimalField(v, { values[f] = it }, "Sınırsız", isInvalid(v), Modifier.width(110.dp), alignEnd = true)
                         }
                     }
                 }
@@ -223,12 +232,7 @@ internal fun CcLimitEditorSheet(
                     FormSeparator()
                 }
                 FormRow {
-                    Text(
-                        "Aylık toplam limit ve özellik başına limit birlikte uygulanır; hangisi önce dolarsa işlem yapılmaz. Boş alan sınırsız, 0 kapalı demektir. " +
-                            (if (AppConfig.inAppPurchase) "Kredi satın almak kişi limitini aşmaz. " else "") +
-                            "Sahip ve yönetici hesaplarının limitine yalnız klinik sahibi dokunur.",
-                        style = sys(12), color = DS.Colors.onSurfaceVariant,
-                    )
+                    Text("Boş bırakılan alan sınırsızdır; 0 o işlemi kredili kullanmayı kapatır.", style = sys(12), color = DS.Colors.onSurfaceVariant)
                 }
             }
         }
@@ -278,20 +282,13 @@ internal fun CcThresholdSheet(
                 if (saving) CreditSpinner() else CreditBarButton("Kaydet", bold = true) { scope.launch { save() } }
             },
         )
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(top = 16.dp, bottom = 24.dp)
-                .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(32.dp),
-        ) {
+        FormGovdesi {
             FormSection(
                 header = "Uyarı eşiği (kredi)",
-                footer = "Kullanılabilir kredi bu eşiğin altına düştüğünde Kredi Yönetimi'ni görebilenlere bildirim gider (0 = kapalı).",
+                footer = "Kullanılabilir kredi bu eşiğin altına düştüğünde kredi yükleme yetkisi olanlara bildirim gider (0 = kapalı).",
             ) {
                 FormRow {
-                    DecimalField(value, { value = it }, "0 = kapalı", CreditInput.parse(value) == CreditInput.invalid, Modifier.fillMaxWidth())
+                    DecimalField(value, { value = it }, "0", CreditInput.parse(value) == CreditInput.invalid, Modifier.fillMaxWidth())
                 }
             }
             val err = error
@@ -302,11 +299,76 @@ internal fun CcThresholdSheet(
     }
 }
 
+// MARK: - Kabul edilen koşullar (Ek MO2.5 / MO2.6)
+
+@Composable
+internal fun CcAcceptedTermsSheet(
+    row: CreditTransactionsPage.Row,
+    load: suspend () -> AcceptedTerms,
+    onDismiss: () -> Unit,
+) {
+    var terms by remember(row.id) { mutableStateOf<AcceptedTerms?>(null) }
+    var error by remember(row.id) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(row.id) {
+        try {
+            terms = load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: CreditCenterClient.ClientError) {
+            error = if (e.code == "E_CREDIT_TERMS_NONE" || e.status == 404) "Bu satın alma, koşul onayı ürüne eklenmeden önce yapıldı."
+            else e.message ?: "Kredi bilgileri yüklenemedi."
+        } catch (e: Exception) {
+            error = "Kredi bilgileri yüklenemedi."
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(DS.Colors.background)) {
+        CreditNavBar("Kabul edilen koşullar", trailing = { CreditBarButton("Kapat") { onDismiss() } })
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding(),
+        ) {
+            Column(
+                Modifier.icerikGenisligi(720.dp).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                val t = terms
+                val err = error
+                when {
+                    t != null -> {
+                        Text(
+                            "${t.kabulEden?.ad ?: "Dentifay"} · ${t.at?.let { CreditDates.short(it) } ?: ""} · Sürüm ${t.surum}",
+                            style = sys(12), color = DS.Colors.onSurfaceVariant,
+                        )
+                        t.metin?.bolumler?.forEach { b ->
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(b.baslik, style = sys(13, FontWeight.SemiBold), color = DS.Colors.onSurface)
+                                b.maddeler.forEach { madde ->
+                                    Text("• $madde", style = sys(12.5), color = DS.Colors.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    err != null -> Text(err, style = sys(13), color = DS.Colors.onSurfaceVariant)
+                    else -> Box(Modifier.fillMaxWidth().padding(vertical = 30.dp), contentAlignment = Alignment.Center) { CreditSpinner() }
+                }
+            }
+        }
+    }
+}
+
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun CcLimitEditorSheetPreview() {
     PreviewEnv {
-        CcLimitEditorSheet(CreditPreviewData.people.people[0], onSave = { _, _ -> }, onDismiss = {})
+        CcLimitEditorSheet(
+            CreditPreviewData.people.people[0], CreditPreviewData.people.features, 1_000_000.0,
+            onSave = { _, _ -> }, onDismiss = {},
+        )
     }
 }
 
@@ -314,6 +376,14 @@ private fun CcLimitEditorSheetPreview() {
 @Composable
 private fun CcThresholdSheetPreview() {
     PreviewEnv {
-        CcThresholdSheet(20.0, onSave = {}, onDismiss = {})
+        CcThresholdSheet(60.0, onSave = {}, onDismiss = {})
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
+@Composable
+private fun CcAcceptedTermsSheetPreview() {
+    PreviewEnv {
+        CcAcceptedTermsSheet(CreditPreviewData.rows[3], load = { CreditPreviewData.kabul }, onDismiss = {})
     }
 }

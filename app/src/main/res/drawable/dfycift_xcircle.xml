@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/XCircle.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 22 12 C 22 17.5228 17.5228 22 12 22 C 6.47715 22 2 17.5228 2 12 C 2 6.47715 6.47715 2 12 2 C 17.5228 2 22 6.47715 22 12 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 8.96967 8.96967 C 9.26256 8.67678 9.73744 8.67678 10.0303 8.96967 L 12 10.9394 L 13.9697 8.96969 C 14.2626 8.6768 14.7374 8.6768 15.0303 8.96969 C 15.3232 9.26258 15.3232 9.73746 15.0303 10.0304 L 13.0607 12 L 15.0303 13.9696 C 15.3232 14.2625 15.3232 14.7374 15.0303 15.0303 C 14.7374 15.3232 14.2625 15.3232 13.9696 15.0303 L 12 13.0607 L 10.0304 15.0303 C 9.73746 15.3232 9.26258 15.3232 8.96969 15.0303 C 8.6768 14.7374 8.6768 14.2626 8.96969 13.9697 L 10.9394 12 L 8.96967 10.0303 C 8.67678 9.73744 8.67678 9.26256 8.96967 8.96967 Z"
+        android:fillColor="#FF000000" />
+</vector>

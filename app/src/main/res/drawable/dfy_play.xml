@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Play.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 18.89 12.846 c -.353 1.343 -2.023 2.292 -5.364 4.19 c -3.23 1.835 -4.845 2.752 -6.146 2.384 a 3.25 3.25 0 0 1 -1.424 -.841 C 5 17.614 5 15.743 5 12 s 0 -5.614 .956 -6.579 a 3.25 3.25 0 0 1 1.424 -.84 c 1.301 -.37 2.916 .548 6.146 2.383 c 3.34 1.898 5.011 2.847 5.365 4.19 a 3.3 3.3 0 0 1 0 1.692 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineJoin="round" />
+</vector>

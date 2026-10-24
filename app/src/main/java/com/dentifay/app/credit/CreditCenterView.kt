@@ -6,29 +6,36 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -39,126 +46,150 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.dentifay.app.auth.LocalAuthManager
 import com.dentifay.app.core.AppConfig
-import com.dentifay.app.core.Unvan
 import com.dentifay.app.theme.DS
-import com.dentifay.app.theme.DfyAlert
-import com.dentifay.app.theme.DfyIcon
 import com.dentifay.app.theme.DfySheet
 import com.dentifay.app.theme.Haptics
 import com.dentifay.app.theme.Motion
-import com.dentifay.app.theme.glassCard
 import com.dentifay.app.theme.hex
-import com.dentifay.app.theme.monoDigits
-import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.icerikGenisligi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.text.Collator
-import java.text.NumberFormat
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 
-/** Kredi Yönetimi bölümleri (Swift `CreditCenterView.Section`). */
+/** Kredi Yönetimi bölümleri (Swift `CreditCenterView.Section`) — web `/krediler` ile AYNI ad ve sıra (Ek MO.21a). */
 enum class CreditCenterSection {
     overview, ledger, people, topUp;
 
     val id: String get() = name
     val label: String
         get() = when (this) {
-            overview -> "Özet"
+            overview -> "Genel Bakış"
             ledger -> "Hareketler"
-            people -> "Kişiler"
-            topUp -> "Yükle"
+            people -> "Kişiler ve Limitler"
+            topUp -> "Kredi Yükle"
         }
-
-    companion object {
-        /** Seçicide görünen bölümler: mağaza derlemesinde "Yükle" yok (`AppConfig.inAppPurchase`). */
-        val visible: List<CreditCenterSection>
-            get() = entries.filter { it != topUp || AppConfig.inAppPurchase }
-    }
 }
+
+/** Gösterge paneli (Genel Bakış, Kişiler ızgarası) en çok bu genişlikte; tablette ortalanır. */
+private val OZET_EN = 1040.dp
+
+/** Okunur liste (Hareketler, Kredi Yükle) genişliği. */
+private val LISTE_EN = 840.dp
+
+/** Bölüm seçicisi genişliği. */
+private val SECICI_EN = 640.dp
+
+/** Geniş düzen eşiği (içerik genişliği): 4 sütun gösterge, yan yana kartlar, iki sütun kişi. */
+private val GENIS_ICERIK = 720.dp
+
+/** Bölüm içeriği: en çok `en` genişlikte ortalı, 16 yatay iç boşluk, üstte `ust` boşluk (Swift `VStack(spacing: 16).padding(16)`). */
+private fun Modifier.bolum(en: Dp, ust: Dp = 16.dp): Modifier =
+    this.icerikGenisligi(en).padding(horizontal = 16.dp).padding(top = ust)
+
+/** Bölüm içeriğinin kullanılabilir genişliği. */
+private fun icGenislik(tam: Dp, en: Dp): Dp = min(tam.value, en.value).dp - 32.dp
 
 /**
- * Kredi Yönetimi — web'deki `/krediler` ekranının telefon karşılığı. AYNI uçları okur
- * (`CreditCenter.kt`), hesap sunucudadır; bu ekran yalnız çizer.
+ * Kredi Yönetimi — web `/krediler` sayfasıyla AYNI ad ve sırada dört bölüm (Ek MO.21a) ve AYNI uçlar
+ * (`CreditCenter.kt`). Hesap sunucudadır; bu ekran yalnız çizer (M0-4).
  *
- *   Özet       kullanılabilir kredi · dönem kullanımı · yeterlilik · özellik/kişi kırılımı ·
- *              gün-saat ısı haritası · en çok kredi harcanan işlemler
- *   Hareketler işlem defteri (kim · ne · ne zaman · kaç kredi), süzgeçli, sayfalı
- *   Kişiler    bu ayın kişi kullanımı + aylık limitler (+ düşük bakiye uyarı eşiği)
- *   Yükle      kredi paketi (bedel kliniğin Dentifay faturasına) · son yüklemeler · fiyat listesi
- *              (yalnız `AppConfig.inAppPurchase`; mağaza derlemesinde krediler web panelinden alınır)
+ *   Genel Bakış        düşük bakiye bandı · dört gösterge · seri · özellik · kişi · ısı haritası · işlemler · aylık döküm ·
+ *                      e-Fatura · kredi ile çalışan işlemler · düşük bakiye eşiği (Ekleme 18 · 37D.2 sırası)
+ *   Hareketler         imleçli defter; süzgeçler (kişi · özellik · tür · aralık) SUNUCUYA gider
+ *   Kişiler ve Limitler ay seçici · kişi satırı (özellik dökümü, limit çubuğu) · limit düzenleme (`If-Match`) · atanmamış kullanım
+ *   Kredi Yükle        yalnız `fin.credits`: paketler (koşul kabulüyle satın alma) · son satın almalar · fatura satırı
  *
- * Görmek `fin.credits.view` ister (varsayılan yalnız klinik sahibi). Limit düzenleme
- * (`fin.credits.limits`) ve satın alma (`fin.credits`) ayrı yetkilerdir; sunucu her yanıtta
- * bunları söyler (`canManageLimits`, `canPurchase`) — ekran kendi kararını uydurmaz.
+ * Görünürlük: `comm.usage` | `fin.credits` (sunucunun görme kapısı); limit düzenleme sunucunun `canManageLimits`ı,
+ * satın alma cüzdanın `canPurchase`ı — ekran kendi kararını uydurmaz. Android: "Kredi Yükle" ayrıca
+ * `AppConfig.inAppPurchase` ister (mağaza derlemesinde krediler web panelinden alınır).
+ *
+ * Tablet: gösterge paneli 1040 dp'de ortalanır, geniş pencerede göstergeler 4 sütun, kartlar ikişer yan yana, kişiler iki
+ * sütun; hareket listesi okunur genişlikte (840 dp). Uzun listeler tembel (satır satır) çizilir.
  */
 @Composable
-fun CreditCenterView(onDismiss: () -> Unit) {
+fun CreditCenterView(onDismiss: () -> Unit, baslangic: CreditCenterSection = CreditCenterSection.overview) {
     val store = remember { CreditCenterStore() }
-    CreditCenterContent(store, onDismiss, initialSection = CreditCenterSection.overview, loadOnAppear = true)
+    CreditCenterContent(store, onDismiss, baslangic)
 }
 
 @Composable
-private fun CreditCenterContent(
-    store: CreditCenterStore,
-    onDismiss: () -> Unit,
-    initialSection: CreditCenterSection,
-    loadOnAppear: Boolean,
-) {
+private fun CreditCenterContent(store: CreditCenterStore, onDismiss: () -> Unit, baslangic: CreditCenterSection) {
+    val caps = LocalAuthManager.current.yetenekler
     val credits = SmileCreditsStore.shared
+    val tarife = KrediTarifesiStore.shared
     val scope = rememberCoroutineScope()
-    var section by remember { mutableStateOf(initialSection) }
+    val listState = rememberLazyListState()
+
+    val yukleAcik = KrediErisimi.yukleBolumu(caps)
+    val sections = CreditCenterSection.entries.filter { it != CreditCenterSection.topUp || yukleAcik }
+    var section by remember {
+        mutableStateOf(if (baslangic == CreditCenterSection.topUp && !yukleAcik) CreditCenterSection.overview else baslangic)
+    }
+    // Yetki değişirse (oturum tazelendi) görünmeyen bölümde kalınmaz.
+    LaunchedEffect(yukleAcik) { if (!yukleAcik && section == CreditCenterSection.topUp) section = CreditCenterSection.overview }
 
     var editing by remember { mutableStateOf<CreditPeople.Person?>(null) }
     var editingThreshold by remember { mutableStateOf(false) }
     var confirmPack by remember { mutableStateOf<SmileCreditPack?>(null) }
     var purchased by remember { mutableStateOf<SmilePurchaseResult?>(null) }
-    val alertTitle by remember { mutableStateOf("") }
-    var alertText by remember { mutableStateOf<String?>(null) }
+    var kosulSatiri by remember { mutableStateOf<CreditTransactionsPage.Row?>(null) }
     var toast by remember { mutableStateOf<String?>(null) }
+    var sonToast by remember { mutableStateOf("") }
+    var eBelgeHata by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
 
-    // Hareketler: son satır göründüğünde sonraki sayfa (`LazyVStack` + `.onAppear`).
-    var viewportBottom by remember { mutableFloatStateOf(0f) }
-    var lastRowId by remember { mutableStateOf<String?>(null) }
-    var lastRowTop by remember { mutableFloatStateOf(Float.MAX_VALUE) }
-    var pagedFor by remember { mutableStateOf<String?>(null) }
-
-    // MARK: - Yükleme
+    // MARK: Yükleme
 
     suspend fun loadSection(s: CreditCenterSection) {
         when (s) {
             CreditCenterSection.overview -> Unit
             CreditCenterSection.ledger -> {
-                if (store.pagination == null && store.rowsError == null) store.loadRows(reset = true)
+                if (!store.rowsLoaded && store.rowsError == null) store.loadRows(reset = true)
                 if (store.people == null) store.loadPeople()   // kişi süzgecinin seçenekleri
             }
             CreditCenterSection.people -> if (store.people == null) store.loadPeople()
-            CreditCenterSection.topUp -> store.loadPurchases()
+            CreditCenterSection.topUp -> store.sonSatinAlmalariYukle()
         }
     }
 
-    suspend fun reloadAll() {
-        store.loadUsage()
-        when (section) {
-            CreditCenterSection.overview -> Unit
+    suspend fun reload(s: CreditCenterSection) {
+        when (s) {
+            CreditCenterSection.overview -> store.loadOverview()
             CreditCenterSection.ledger -> store.loadRows(reset = true)
             CreditCenterSection.people -> store.loadPeople()
-            CreditCenterSection.topUp -> store.loadPurchases()
+            CreditCenterSection.topUp -> {
+                credits.refresh()
+                store.sonSatinAlmalariYukle()
+            }
         }
     }
 
     fun flash(text: String) {
         Haptics.success()
+        sonToast = text
         toast = text
         scope.launch {
             delay(3000)
@@ -166,41 +197,36 @@ private fun CreditCenterContent(
         }
     }
 
-    /** `CreditPurchaseSheet` koşulları onaylatıp satın aldıktan SONRA (hatalar pencerede gösterilir). */
+    /** Satın alma tamamlandıktan SONRA (hatalar pencerede gösterilir) — iki depo da sunucudan tazelenir. */
     suspend fun purchaseDone(r: SmilePurchaseResult) {
         purchased = r
         Haptics.success()
-        store.loadUsage()
-        store.loadPurchases()
+        store.loadOverview()
+        store.sonSatinAlmalariYukle()
     }
 
     LaunchedEffect(Unit) {
-        if (loadOnAppear) {
-            store.loadUsage()
-            loadSection(section)
-        }
-    }
-    LaunchedEffect(Unit) { snapshotFlow { section }.drop(1).collect { s -> scope.launch { loadSection(s) } } }
-    LaunchedEffect(Unit) {
-        snapshotFlow { store.range }.drop(1).collect {
-            scope.launch {
-                store.loadUsage()
-                if (store.pagination != null || store.rowsError != null) store.loadRows(reset = true)
-            }
-        }
+        store.loadOverview()
+        credits.refresh()
+        loadSection(section)
     }
     LaunchedEffect(Unit) {
-        snapshotFlow { "${store.filterUser ?: ""}|${store.filterFeature ?: ""}|${store.filterKind ?: ""}" }
-            .drop(1).collect { scope.launch { store.loadRows(reset = true) } }
-    }
-    LaunchedEffect(Unit) { snapshotFlow { store.month }.drop(1).collect { scope.launch { store.loadPeople() } } }
-    LaunchedEffect(Unit) {
-        snapshotFlow { Triple(lastRowId, lastRowTop, viewportBottom) }.collect { (id, top, bottom) ->
-            if (section == CreditCenterSection.ledger && id != null && top < bottom && pagedFor != id) {
-                pagedFor = id
-                scope.launch { store.loadRows(reset = false) }
-            }
+        snapshotFlow { section }.drop(1).collectLatest { s ->
+            listState.scrollToItem(0)
+            loadSection(s)
         }
+    }
+    LaunchedEffect(Unit) { snapshotFlow { store.range }.drop(1).collectLatest { store.loadAnalysis() } }
+    LaunchedEffect(Unit) { snapshotFlow { store.filter }.drop(1).collectLatest { store.loadRows(reset = true) } }
+    LaunchedEffect(Unit) { snapshotFlow { store.month }.drop(1).collectLatest { store.loadPeople() } }
+
+    // Kişi süzgecinin seçenekleri: aralıkta kullananlar + Kişiler listesi (tekil, ada göre).
+    val analysis = store.analysis
+    val peopleData = store.people
+    val personOptions = remember(analysis, peopleData) { kisiSecenekleri(analysis, peopleData) }
+    // Özellik süzgeci: sunucunun kredili özellikleri + satın alma / tanım.
+    val featureOptions = remember(peopleData) {
+        (peopleData?.features ?: listOf("ai_agent", "ai_center", "xray", "messaging", "before_after")) + listOf("purchase", "platform_grant")
     }
 
     Column(Modifier.fillMaxSize().background(DS.Colors.background)) {
@@ -210,68 +236,100 @@ private fun CreditCenterContent(
             onRefresh = {
                 refreshing = true
                 scope.launch {
-                    reloadAll()
-                    refreshing = false
+                    try {
+                        reload(section)
+                    } finally {
+                        refreshing = false
+                    }
                 }
             },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .onGloballyPositioned { viewportBottom = it.boundsInRoot().bottom }
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Column(
-                    Modifier
-                        .padding(16.dp)
-                        .padding(bottom = 24.dp)
-                        .navigationBarsPadding(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    val sections = CreditCenterSection.visible
-                    CcSegmented(
-                        options = sections.map { it.label },
-                        selected = sections.indexOf(section).coerceAtLeast(0),
-                        onSelect = { section = sections[it] },
-                    )
-
-                    if (section == CreditCenterSection.overview || section == CreditCenterSection.ledger) {
-                        RangeBar(store)
-                    }
-
-                    AnimatedVisibility(toast != null, enter = fadeIn(Motion.default()), exit = fadeOut(Motion.default())) {
-                        CreditIconLabel(
-                            toast ?: "", "checkmark.circle.fill",
-                            size = 13f, weight = FontWeight.SemiBold, color = DS.Colors.tertiaryContainer,
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val tamW = maxWidth
+                LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                    item(key = "bolumler", contentType = "secici") {
+                        CcSegmented(
+                            options = sections.map { it.label },
+                            selected = sections.indexOf(section).coerceAtLeast(0),
+                            onSelect = { i -> sections.getOrNull(i)?.let { section = it } },
+                            modifier = Modifier.bolum(SECICI_EN),
                         )
+                    }
+                    if (section == CreditCenterSection.overview) {
+                        item(key = "aralik", contentType = "aralik") { RangeBar(store, Modifier.bolum(OZET_EN)) }
+                    }
+                    item(key = "bildirim", contentType = "bildirim") {
+                        Column(Modifier.fillMaxWidth()) {
+                            AnimatedVisibility(toast != null, enter = fadeIn(Motion.default()), exit = fadeOut(Motion.default())) {
+                                CreditIconLabel(
+                                    sonToast, "checkmark.circle.fill", Modifier.bolum(OZET_EN),
+                                    size = 13f, weight = FontWeight.SemiBold, color = DS.Colors.tertiaryContainer,
+                                )
+                            }
+                        }
                     }
 
                     when (section) {
-                        CreditCenterSection.overview -> Overview(
-                            store,
-                            onTopUp = if (AppConfig.inAppPurchase) ({ section = CreditCenterSection.topUp }) else null,
-                        ) { userId ->
-                            store.filterUser = userId
-                            section = CreditCenterSection.ledger
-                        }
-                        CreditCenterSection.ledger -> Ledger(store, onLastRowPositioned = { rowId, top ->
-                            lastRowId = rowId
-                            lastRowTop = top
-                        }, onRetryMore = { scope.launch { store.loadRows(reset = false) } }, onRetry = { scope.launch { store.loadRows(reset = true) } })
-                        CreditCenterSection.people -> PeopleSection(
-                            store,
+                        CreditCenterSection.overview -> genelBakis(
+                            store = store,
+                            wallet = store.usage?.wallet ?: credits.wallet,
+                            tarife = tarife,
+                            tamW = tamW,
+                            eBelgeHata = eBelgeHata,
+                            yukleEylemi = if (yukleAcik) ({ section = CreditCenterSection.topUp }) else null,
+                            onSelectUser = { userId ->
+                                store.filter = CreditFilter(userId = userId)
+                                section = CreditCenterSection.ledger
+                            },
+                            onRefreshEDocument = {
+                                scope.launch {
+                                    try {
+                                        store.refreshEDocument()
+                                        eBelgeHata = null
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: CreditCenterClient.ClientError) {
+                                        eBelgeHata = e.message ?: "Kontör yenilenemedi."
+                                    } catch (e: Exception) {
+                                        eBelgeHata = "Kontör yenilenemedi."
+                                    }
+                                }
+                            },
                             onEditThreshold = { editingThreshold = true },
+                            onRetryOverview = { scope.launch { store.loadOverview() } },
+                            onRetryAnalysis = { scope.launch { store.loadAnalysis() } },
+                        )
+                        CreditCenterSection.ledger -> hareketler(
+                            store = store,
+                            showTerms = KrediErisimi.yukleGorur(caps),
+                            personOptions = personOptions,
+                            featureOptions = featureOptions,
+                            onTerms = { kosulSatiri = it },
+                            onRetry = { scope.launch { store.loadRows(reset = true) } },
+                            onMore = { scope.launch { store.loadRows(reset = false) } },
+                        )
+                        CreditCenterSection.people -> kisilerVeLimitler(
+                            store = store,
+                            tamW = tamW,
                             onEdit = { editing = it },
+                            onMore = { scope.launch { store.loadPeople(more = true) } },
                             onRetry = { scope.launch { store.loadPeople() } },
                         )
-                        CreditCenterSection.topUp -> if (AppConfig.inAppPurchase) {
-                            TopUp(
-                                store, credits, purchased,
-                                onBuy = { confirmPack = it },
-                                onRetry = { scope.launch { store.loadUsage() } },
-                            )
-                        }
+                        CreditCenterSection.topUp -> krediYukle(
+                            store = store,
+                            credits = credits,
+                            wallet = credits.wallet ?: store.usage?.wallet,
+                            purchased = purchased,
+                            tamW = tamW,
+                            onBuy = { confirmPack = it },
+                            onTerms = { kosulSatiri = it },
+                            onRetry = { scope.launch { credits.refresh() } },
+                        )
+                    }
+
+                    item(key = "son", contentType = "son") {
+                        Spacer(Modifier.fillMaxWidth().navigationBarsPadding().height(40.dp))
                     }
                 }
             }
@@ -281,18 +339,23 @@ private fun CreditCenterContent(
     DfySheet(isPresented = editing != null, onDismiss = { editing = null }, containerColor = DS.Colors.background) { dismiss ->
         editing?.let { person ->
             CcLimitEditorSheet(
-                person,
+                person = person,
+                features = store.people?.features ?: emptyList(),
+                maxCredits = store.people?.maxLimitCredits ?: 1_000_000.0,
                 onSave = { total, features ->
-                    store.saveLimits(person.user.id, total, features)
-                    flash("${Unvan.dt(person.user.name ?: "Kişi")} için limit kaydedildi.")
+                    store.saveLimits(person, total, features)
+                    flash("Kredi limiti kaydedildi.")
                 },
                 onDismiss = dismiss,
             )
         }
     }
-    DfySheet(isPresented = editingThreshold, onDismiss = { editingThreshold = false }, containerColor = DS.Colors.background, heightFraction = 0.5f) { dismiss ->
+    DfySheet(
+        isPresented = editingThreshold, onDismiss = { editingThreshold = false },
+        containerColor = DS.Colors.background, heightFraction = 0.5f,
+    ) { dismiss ->
         CcThresholdSheet(
-            current = store.usage?.wallet?.lowBalanceWarnCredits ?: 0.0,
+            current = store.settings?.lowBalanceWarnCredits ?: 0.0,
             onSave = { value ->
                 store.saveThreshold(value)
                 flash("Uyarı eşiği kaydedildi.")
@@ -300,7 +363,7 @@ private fun CreditCenterContent(
             onDismiss = dismiss,
         )
     }
-    // Satın alma: Kredi Satın Alma Koşulları okunup onaylanmadan YAPILMAZ (sunucu 428 verir).
+    // Satın alma: Kredi Satın Alma Koşulları okunup onaylanmadan YAPILMAZ (Ekleme 18 · 37C; sunucu 428/409).
     // Mağaza derlemesinde pencere hiç yok (`AppConfig.inAppPurchase`).
     if (AppConfig.inAppPurchase) {
         DfySheet(isPresented = confirmPack != null, onDismiss = { confirmPack = null }, containerColor = DS.Colors.background) { dismiss ->
@@ -309,382 +372,545 @@ private fun CreditCenterContent(
             }
         }
     }
-    DfyAlert(
-        isPresented = alertText != null,
-        title = alertTitle,
-        message = alertText,
-        confirmText = "Tamam",
-        onConfirm = { alertText = null },
-        onDismiss = { alertText = null },
-    )
-}
-
-// MARK: - Bölüm seçici (`Picker(.segmented)`)
-
-@Composable
-private fun CcSegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    BoxWithConstraints(
-        Modifier
-            .fillMaxWidth()
-            .height(32.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(hex("767680").copy(alpha = 0.24f))
-            .padding(2.dp),
-    ) {
-        val segW = maxWidth / options.size
-        val x by animateDpAsState(segW * selected, Motion.spring(0.3, 0.85), label = "segment")
-        Box(
-            Modifier
-                .offset(x = x)
-                .width(segW)
-                .fillMaxHeight()
-                .shadow(2.dp, RoundedCornerShape(7.dp))
-                .clip(RoundedCornerShape(7.dp))
-                .background(hex("636366")),
-        )
-        Row(Modifier.fillMaxSize()) {
-            options.forEachIndexed { i, title ->
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .plainClickable { if (i != selected) onSelect(i) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(title, style = sys(13, if (i == selected) FontWeight.SemiBold else FontWeight.Medium), color = Color.White, maxLines = 1)
-                }
-            }
+    DfySheet(isPresented = kosulSatiri != null, onDismiss = { kosulSatiri = null }, containerColor = DS.Colors.background) { dismiss ->
+        kosulSatiri?.let { row ->
+            CcAcceptedTermsSheet(row, load = { store.acceptedTerms(row) }, onDismiss = dismiss)
         }
     }
 }
 
-// MARK: - Tarih aralığı
-
-@Composable
-private fun RangeBar(store: CreditCenterStore) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        CcMenu(CreditRange.entries.map { r -> CcMenuItem(r.label, checked = r == store.range) { store.range = r } }) {
-            CcFilterChip("calendar", store.range.label, active = true)
-        }
-        store.usage?.let { u ->
-            Text("${CreditDates.dayLabel(u.from)} – ${CreditDates.dayLabel(u.to)}", style = sys(12), color = DS.Colors.onSurfaceVariant)
-        }
-        Spacer(Modifier.weight(1f))
-        if (store.isLoadingUsage) CreditSpinner(color = DS.Colors.cyan400, size = 16.dp)
-    }
-}
-
-// MARK: - Özet
-
-@Composable
-private fun Overview(store: CreditCenterStore, onTopUp: (() -> Unit)?, onSelectUser: (String) -> Unit) {
-    val u = store.usage
-    val error = store.usageError
-    if (u != null) {
-        val order = u.features.map { it.feature }
-        if (u.wallet.isLow) {
-            CcBanner(
-                "exclamationmark.triangle.fill", DS.Colors.orange400,
-                "Kullanılabilir kredi (${creditText(u.wallet.availableCredits)}) uyarı eşiğinin (${creditText(u.wallet.lowBalanceWarnCredits)}) altında.",
-                onTopUp?.let { "Kredi yükle" }, onTopUp,
-            )
-        }
-        CcKpiGrid(u)
-        if (u.truncated == true) {
-            CcBanner("info.circle.fill", DS.Colors.cyan400, "Aralık çok büyük; ilk 200.000 işlem gösteriliyor. Daha kısa bir aralık seçin.")
-        }
-        CcCard("Kredi kullanımı", if (u.unit == "month") "Ay ay, özelliğe göre (iade düşülmüş)" else "Gün gün, özelliğe göre (iade düşülmüş)") {
-            CcUsageChart(u, order)
-        }
-        CcCard("Özelliğe göre", "Kredinin nereye harcandığı") {
-            CcFeatureBreakdown(u.features, order)
-        }
-        CcCard("Kişiye göre", "Kim ne kadar kullandı — kişiye dokununca hareketleri açılır") {
-            CcUserBreakdown(u.users, store.clinicTimeZone, onSelectUser)
-        }
-        CcCard("Gün ve saate göre kullanım", "Kliniğin saatiyle (${u.tz}); koyu hücre daha çok kredi") {
-            CcHeatmapGrid(u.heatmap)
-        }
-        CcCard("En çok kredi harcanan işlemler", null) {
-            CcActionList(u.actions)
-        }
-        CcFootnote("Kullanım NET gösterilir: başarısız işlemin iadesi aynı kişiye ve aynı güne yazılır. Hareketler bölümünde her işlem tek tek görünür.")
-    } else if (error != null) {
-        val scope = rememberCoroutineScope()
-        CcErrorCard("Kredi kullanımı yüklenemedi", error) { scope.launch { store.loadUsage() } }
-    } else {
-        CcLoadingBlock()
-    }
-}
-
-// MARK: - Hareketler
-
-/** Kişi süzgecinin seçenekleri: dönemde kullanan + klinikteki kişiler (tekil, ada göre). */
-private fun personOptions(store: CreditCenterStore): List<Pair<String, String>> {
+/** Kişi süzgecinin seçenekleri: aralıkta kullananlar + Kişiler listesi (tekil, Türkçe ada göre). */
+private fun kisiSecenekleri(analysis: CreditAnalysis?, people: CreditPeople?): List<Pair<String, String>> {
     val seen = mutableSetOf<String>()
     val out = mutableListOf<Pair<String, String>>()
-    store.usage?.users?.forEach { u ->
+    analysis?.users?.forEach { u ->
         val p = u.user
         if (p != null && seen.add(p.id)) out += p.id to p.displayName
     }
-    store.people?.people?.forEach { p ->
+    people?.people?.forEach { p ->
         if (seen.add(p.user.id)) out += p.user.id to p.user.displayName
     }
     val collator = Collator.getInstance(Locale.forLanguageTag("tr-TR"))
     return out.sortedWith { a, b -> collator.compare(a.second, b.second) }
 }
 
+// MARK: - Bölüm seçici (`Picker(.segmented)`)
+
+private val SegmentZemin = hex("767680").copy(alpha = 0.24f)
+private val SegmentSecili = hex("636366")
+
+/**
+ * iOS segmentli seçici. Etiketler sığmazsa yazı (en az 11) küçülür, o da yetmezse iki satıra iner — hiçbir genişlikte
+ * kesilmez ("Kişiler ve Limitler" telefonda). Seçim göstergesi yalnız konumla kayar (yeniden çizim yok).
+ */
 @Composable
-private fun Ledger(
+private fun CcSegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .background(SegmentZemin)
+            .padding(2.dp)
+            .semantics { contentDescription = "Kredi Yönetimi bölümleri" }
+            .selectableGroup(),
+    ) {
+        val n = max(1, options.size)
+        val segW = maxWidth / n
+        val olcu = remember(options, segW, density) {
+            val stil = sys(13, FontWeight.SemiBold)
+            val avail = with(density) { (segW - 12.dp).toPx() }
+            val widest = options.maxOfOrNull { measurer.measure(it, stil, maxLines = 1, softWrap = false).size.width.toFloat() } ?: 0f
+            when {
+                widest <= 0f || widest <= avail -> 13f to 1
+                13f * avail / widest >= 11f -> (13f * avail / widest) to 1
+                else -> 11f to 2
+            }
+        }
+        val x by animateDpAsState(segW * selected, Motion.spring(0.3, 0.85), label = "segment")
+        Box(Modifier.matchParentSize()) {
+            Box(
+                Modifier
+                    .offset { IntOffset(x.roundToPx(), 0) }
+                    .width(segW)
+                    .fillMaxHeight()
+                    .shadow(2.dp, RoundedCornerShape(7.dp))
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(SegmentSecili),
+            )
+        }
+        Row(Modifier.fillMaxWidth()) {
+            options.forEachIndexed { i, title ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .heightIn(min = 28.dp)
+                        .selectable(
+                            selected = i == selected,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            role = Role.Tab,
+                        ) { if (i != selected) onSelect(i) }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        title,
+                        style = sys(olcu.first, if (i == selected) FontWeight.SemiBold else FontWeight.Medium),
+                        color = Color.White, maxLines = olcu.second, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Tarih aralığı (varsayılan bu ay; sunucu en çok bir yıl kabul eder)
+
+@Composable
+private fun RangeBar(store: CreditCenterStore, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        CcMenu(CreditRange.entries.map { r -> CcMenuItem(r.label, checked = r == store.range) { store.range = r } }) {
+            CcFilterChip("calendar", store.range.label, active = true)
+        }
+        val a = store.analysis
+        val f = a?.from
+        val t = a?.to
+        if (f != null && t != null) {
+            Text(
+                "${CreditDates.dayLabel(f)} – ${CreditDates.dayLabel(t)}", Modifier.weight(1f, fill = false),
+                style = sys(12), color = DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (store.isLoadingOverview) CreditSpinner(color = DS.Colors.cyan400, size = 16.dp)
+    }
+}
+
+// MARK: - Genel Bakış
+
+/** Genel Bakış parçası: geniş pencerede `yarim` parçalar ikişer yan yana dizilir. */
+private class OzetParca(val key: String, val yarim: Boolean, val icerik: @Composable (Modifier) -> Unit)
+
+private fun LazyListScope.genelBakis(
     store: CreditCenterStore,
-    onLastRowPositioned: (String, Float) -> Unit,
-    onRetryMore: () -> Unit,
-    onRetry: () -> Unit,
+    wallet: SmileWallet?,
+    tarife: KrediTarifesiStore,
+    tamW: Dp,
+    eBelgeHata: String?,
+    yukleEylemi: (() -> Unit)?,
+    onSelectUser: (String) -> Unit,
+    onRefreshEDocument: () -> Unit,
+    onEditThreshold: () -> Unit,
+    onRetryOverview: () -> Unit,
+    onRetryAnalysis: () -> Unit,
 ) {
-    val options = personOptions(store)
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CcMenu(listOf(CcMenuItem("Tüm kişiler") { store.filterUser = null }) + options.map { p -> CcMenuItem(p.second) { store.filterUser = p.first } }) {
-            CcFilterChip("person", options.firstOrNull { it.first == store.filterUser }?.second ?: "Tüm kişiler", active = store.filterUser != null)
+    val icW = icGenislik(tamW, OZET_EN)
+    val genis = icW >= GENIS_ICERIK
+    val parcalar = mutableListOf<OzetParca>()
+
+    val w = wallet
+    val usageError = store.usageError
+    if (w != null) {
+        if (w.isLow == true) {
+            val eylem = if (w.canPurchase) yukleEylemi else null
+            parcalar += OzetParca("ozet-dusuk", false) { m ->
+                Box(m) {
+                    CcBanner(
+                        "exclamationmark.triangle.fill", DS.Colors.orange400,
+                        "Kullanılabilir kredi (${creditText(w.availableCredits)}) uyarı eşiğinin (${creditText(w.lowBalanceWarnCredits ?: 0.0)}) altında.",
+                        eylem?.let { "Kredi yükle" }, eylem,
+                    )
+                }
+            }
         }
-        CcMenu(listOf(CcMenuItem("Tüm özellikler") { store.filterFeature = null }) + CreditLabels.limitFeatures.map { f -> CcMenuItem(CreditLabels.feature(f)) { store.filterFeature = f } }) {
-            CcFilterChip("square.grid.2x2", store.filterFeature?.let { CreditLabels.feature(it) } ?: "Tüm özellikler", active = store.filterFeature != null)
+        parcalar += OzetParca("ozet-kpi", false) { m -> Box(m) { CcKpiGrid(w, store.analysis, if (genis) 4 else 2) } }
+        parcalar += OzetParca("ozet-buay", false) { m ->
+            Text("Bu ay kullanılan: ${creditText(w.thisMonth?.usedCredits ?: 0.0)} kredi", m, style = sys(12), color = DS.Colors.onSurfaceVariant)
         }
-        CcMenu(listOf(CcMenuItem("Tüm türler") { store.filterKind = null }) + CreditLabels.kindOrder.map { k -> CcMenuItem(CreditLabels.kinds[k] ?: k) { store.filterKind = k } }) {
-            CcFilterChip("line.3.horizontal.decrease", store.filterKind?.let { CreditLabels.kinds[it] } ?: "Tüm türler", active = store.filterKind != null)
+    } else if (usageError != null) {
+        parcalar += OzetParca("ozet-cuzdanHata", false) { m -> Box(m) { CcErrorCard("Kredi bilgileri yüklenemedi.", usageError, onRetryOverview) } }
+    } else if (CreditCenterStore.Parca.usage !in store.gizli) {   // kodsuz 403 → parça çizilmez (M-E7.5)
+        parcalar += OzetParca("ozet-yukleniyor", false) { m -> Box(m) { CcLoadingBlock() } }
+    }
+
+    val a = store.analysis
+    val analysisError = store.analysisError
+    if (a != null) {
+        val order = a.features.map { it.feature }
+        parcalar += OzetParca("ozet-grafik", false) { m ->
+            CcCard("Kredi kullanımı", if (a.unit == "month") "Ay ay, özelliğe göre" else "Gün gün, özelliğe göre", m) {
+                CcUsageChart(a, order, yukseklik = if (genis) 240.dp else 184.dp)
+            }
+        }
+        parcalar += OzetParca("ozet-ozellik", true) { m ->
+            CcCard("Özelliğe göre kullanım", null, m) { CcFeatureBreakdown(a.features, order) }
+        }
+        parcalar += OzetParca("ozet-kisi", true) { m ->
+            CcCard("Kişiye göre", "Kim ne kadar kullandı — kişiye tıklayınca hareketleri açılır", m) { CcUserBreakdown(a.users, onSelectUser) }
+        }
+        parcalar += OzetParca("ozet-isi", false) { m ->
+            CcCard("Gün ve saate göre kullanım", "Kliniğin saatiyle (${a.tz ?: "Europe/Istanbul"}); koyu hücre daha çok kredi", m) {
+                CcHeatmapGrid(a.heatmap)
+            }
+        }
+        val kesik = if (a.truncated == true) OzetParca("ozet-kesik", false) { m ->
+            Box(m) {
+                CcBanner("info.circle.fill", DS.Colors.cyan400, "Aralık çok büyük; ilk 200.000 işlem gösteriliyor. Daha kısa bir aralık seçin.")
+            }
+        } else null
+        // Geniş düzende uyarı, yan yana kart çiftini bölmesin diye işlemlerin önüne alınır.
+        if (genis && kesik != null) parcalar += kesik
+        parcalar += OzetParca("ozet-islemler", true) { m ->
+            CcCard("En çok kredi harcanan işlemler", null, m) { CcActionList(a.actions) }
+        }
+        if (!genis && kesik != null) parcalar += kesik
+    } else if (analysisError != null) {
+        parcalar += OzetParca("ozet-analizHata", false) { m -> Box(m) { CcErrorCard("Kullanım dağılımı yüklenemedi.", analysisError, onRetryAnalysis) } }
+    }
+
+    val months = store.usage?.months
+    if (!months.isNullOrEmpty()) {
+        parcalar += OzetParca("ozet-aylar", true) { m ->
+            CcCard("Geçmiş aylar", "Kullanılan kredi ve satın alınan paketlerin faturaya yansıyan tutarı, ay ay.", m) { CcMonthlyList(months) }
         }
     }
 
-    store.pagination?.let { p ->
-        Text("${NumberFormat.getNumberInstance(Locale.forLanguageTag("tr-TR")).format(p.total)} işlem", style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
+    if (CreditCenterStore.Parca.eDocument !in store.gizli) {
+        parcalar += OzetParca("ozet-efatura", true) { m ->
+            CcEDocumentCard(store.eDocument, store.eDocumentError, eBelgeHata, onRefreshEDocument, m)
+        }
+    }
+
+    parcalar += OzetParca("ozet-tarife", true) { m ->
+        CcCard("Kredi ile çalışan işlemler", null, m) { CcTariffList(tarife.tarife, tarife.hata) }
+    }
+
+    store.settings?.let { s ->
+        parcalar += OzetParca("ozet-esik", false) { m -> Box(m) { CcThresholdCard(s.lowBalanceWarnCredits, s.canEdit == true, onEditThreshold) } }
+    }
+    parcalar += OzetParca("ozet-not", false) { m ->
+        CcFootnote("Kullanım NET gösterilir: başarısız işlemin iadesi aynı kişiye ve aynı güne yazılır. Hareketler sekmesinde her işlem tek tek görünür.", m)
+    }
+
+    var i = 0
+    while (i < parcalar.size) {
+        val p = parcalar[i]
+        val q = parcalar.getOrNull(i + 1)
+        if (genis && p.yarim && q != null && q.yarim) {
+            item(key = "${p.key}+${q.key}", contentType = "ozet-cift") {
+                Row(Modifier.bolum(OZET_EN).height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    p.icerik(Modifier.weight(1f).fillMaxHeight())
+                    q.icerik(Modifier.weight(1f).fillMaxHeight())
+                }
+            }
+            i += 2
+        } else {
+            item(key = p.key, contentType = p.key) { p.icerik(Modifier.bolum(OZET_EN)) }
+            i += 1
+        }
+    }
+}
+
+// MARK: - Hareketler (süzgeçler sunucuya — Ekleme 18 · 37D.1)
+
+private fun LazyListScope.hareketler(
+    store: CreditCenterStore,
+    showTerms: Boolean,
+    personOptions: List<Pair<String, String>>,
+    featureOptions: List<String>,
+    onTerms: (CreditTransactionsPage.Row) -> Unit,
+    onRetry: () -> Unit,
+    onMore: () -> Unit,
+) {
+    item(key = "hareket-suzgecler", contentType = "suzgecler") {
+        val filter = store.filter
+        Row(
+            Modifier.bolum(LISTE_EN).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CcMenu(
+                listOf(CcMenuItem("Tüm kişiler") { store.filter = store.filter.copy(userId = null) }) +
+                    personOptions.map { (id, name) -> CcMenuItem(name) { store.filter = store.filter.copy(userId = id) } },
+            ) {
+                CcFilterChip("person", personOptions.firstOrNull { it.first == filter.userId }?.second ?: "Tüm kişiler", active = filter.userId != null)
+            }
+            CcMenu(
+                listOf(CcMenuItem("Tüm özellikler") { store.filter = store.filter.copy(feature = null) }) +
+                    featureOptions.map { f -> CcMenuItem(CreditLabels.feature(f)) { store.filter = store.filter.copy(feature = f) } },
+            ) {
+                CcFilterChip("square.grid.2x2", filter.feature?.let { CreditLabels.feature(it) } ?: "Tüm özellikler", active = filter.feature != null)
+            }
+            CcMenu(
+                listOf(CcMenuItem("Tüm türler") { store.filter = store.filter.copy(tur = null) }) +
+                    CreditLabels.kindOrder.map { k -> CcMenuItem(CreditLabels.kind(k)) { store.filter = store.filter.copy(tur = k) } },
+            ) {
+                CcFilterChip("line.3.horizontal.decrease", filter.tur?.let { CreditLabels.kind(it) } ?: "Tüm türler", active = filter.tur != null)
+            }
+            CcMenu(
+                listOf(CcMenuItem("Tümü") { store.filter = store.filter.copy(from = null, to = null) }) +
+                    CreditRange.entries.map { r ->
+                        CcMenuItem(r.label) {
+                            val b = r.bounds(store.clinicTimeZone)
+                            store.filter = store.filter.copy(from = b.from, to = b.to)
+                        }
+                    },
+            ) {
+                val f = filter.from
+                val t = filter.to
+                val etiket = if (f != null && t != null) "${CreditDates.dayLabel(f)} – ${CreditDates.dayLabel(t)}" else "Tarih aralığı"
+                CcFilterChip("calendar", etiket, active = f != null)
+            }
+        }
     }
 
     val rows = store.rows
     val error = store.rowsError
-    if (rows.isEmpty() && error != null) {
-        CcErrorCard("Kredi hareketleri yüklenemedi", error, onRetry)
-    } else if (rows.isEmpty() && (store.isLoadingRows || store.pagination == null)) {
-        CcLoadingBlock()
-    } else if (rows.isEmpty()) {
-        CcEmptyNote("Bu süzgeçle hareket yok.")
-    } else {
-        val tz = store.clinicTimeZone
-        val lastId = rows.last().id
-        Column(Modifier.fillMaxWidth().glassCard(18.dp).padding(horizontal = 14.dp)) {
-            rows.forEach { row ->
-                val isLast = row.id == lastId
+    when {
+        CreditCenterStore.Parca.rows in store.gizli -> Unit   // kodsuz 403 → parça çizilmez (M-E7.5)
+        rows.isEmpty() && error != null -> item(key = "hareket-hata", contentType = "hata") {
+            Box(Modifier.bolum(LISTE_EN)) { CcErrorCard("Kredi hareketleri yüklenemedi.", error, onRetry) }
+        }
+        rows.isEmpty() && (store.isLoadingRows || !store.rowsLoaded) -> item(key = "hareket-yukleniyor", contentType = "yukleniyor") {
+            Box(Modifier.bolum(LISTE_EN)) { CcLoadingBlock() }
+        }
+        rows.isEmpty() -> item(key = "hareket-bos", contentType = "bos") {
+            Box(Modifier.bolum(LISTE_EN)) { CcEmptyNote("Henüz kredi hareketi yok.") }
+        }
+        else -> {
+            val son = rows.lastIndex
+            // Her satır ortak cam kartın kendi dilimini çizer — uzun defter tembel çizilir.
+            itemsIndexed(rows, key = { _, r -> "hareketSatiri-${r.id}" }, contentType = { _, _ -> "hareket" }) { i, r ->
                 CcLedgerRow(
-                    row, tz,
-                    if (isLast) Modifier.onGloballyPositioned { onLastRowPositioned(row.id, it.positionInRoot().y) } else Modifier,
+                    r, showTerms = showTerms, onTerms = { onTerms(r) },
+                    modifier = Modifier
+                        .bolum(LISTE_EN, ust = if (i == 0) 16.dp else 0.dp)
+                        .kartDilimi(ilk = i == 0, son = i == son)
+                        .padding(horizontal = 14.dp),
                 )
-                if (!isLast) CreditDivider()
+            }
+            if (store.isLoadingRows) {
+                item(key = "hareket-dahaYukleniyor", contentType = "yukleniyor") {
+                    Box(Modifier.bolum(LISTE_EN, ust = 8.dp).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                        CreditSpinner(color = DS.Colors.cyan400)
+                    }
+                }
+            } else if (store.nextCursor != null) {
+                item(key = "hareket-daha", contentType = "daha") { Box(Modifier.bolum(LISTE_EN)) { CcMoreButton(onMore) } }
+            }
+            if (error != null) {
+                item(key = "hareket-dahaHata", contentType = "hataMetni") {
+                    Text(error, Modifier.bolum(LISTE_EN), style = sys(12), color = DS.Colors.error)
+                }
             }
         }
-        if (store.isLoadingRows) {
-            Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) { CreditSpinner(color = DS.Colors.cyan400) }
-        } else if (error != null) {
-            CreditIconLabel("$error Tekrar dene", "arrow.clockwise", Modifier.plainClickable(onClick = onRetryMore), size = 12f, color = CreditSystemBlue)
-        }
     }
-    CcFootnote("Ücretsiz ve satın alınmış krediden birlikte ödenen işlem tek satırdır. İade, gerçekleştiği anda ayrı satır olarak görünür; Özet'te ise düşüldüğü işleme yazılır.")
+    item(key = "hareket-not", contentType = "not") {
+        CcFootnote(
+            "Ücretsiz ve satın alınmış krediden birlikte ödenen işlem tek satırdır. İade, gerçekleştiği anda ayrı satır olarak görünür; Genel Bakış'ta ise düşüldüğü işleme yazılır.",
+            Modifier.bolum(LISTE_EN),
+        )
+    }
 }
 
-// MARK: - Kişiler
+// MARK: - Kişiler ve Limitler
 
-@Composable
-private fun PeopleSection(
+private fun LazyListScope.kisilerVeLimitler(
     store: CreditCenterStore,
-    onEditThreshold: () -> Unit,
+    tamW: Dp,
     onEdit: (CreditPeople.Person) -> Unit,
+    onMore: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    val months = CreditDates.lastMonths(12, store.clinicTimeZone)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CcMenu(months.map { m -> CcMenuItem(CreditDates.monthLabel(m)) { store.month = m } }) {
-            CcFilterChip("calendar", CreditDates.monthLabel(store.month ?: store.people?.month ?: months.firstOrNull() ?: ""), active = true)
+    item(key = "kisi-ay", contentType = "ay") {
+        val months = remember { CreditDates.lastMonths(12, CreditDates.istanbul) }
+        Row(Modifier.bolum(OZET_EN), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CcMenu(months.map { m -> CcMenuItem(CreditDates.monthLabel(m)) { store.month = m } }) {
+                CcFilterChip("calendar", "Ay: ${CreditDates.monthLabel(store.month ?: store.people?.month ?: months.firstOrNull() ?: "")}", active = true)
+            }
         }
     }
-    CcFootnote("Limitler kliniğin takvim ayıyla sayılır; ay başında sıfırlanır.")
+    item(key = "kisi-ayNot", contentType = "not") {
+        CcFootnote("Limitler takvim ayıyla sayılır; ay başında sıfırlanır.", Modifier.bolum(OZET_EN))
+    }
 
     val data = store.people
     val error = store.peopleError
     if (data != null) {
-        val u = store.usage
-        if (data.canManageLimits && u != null) {
-            CcThresholdCard(u.wallet.lowBalanceWarnCredits, onEditThreshold)
+        if (data.people.isEmpty() && data.unattributed == null) {
+            item(key = "kisi-bos", contentType = "bos") { Box(Modifier.bolum(OZET_EN)) { CcEmptyNote("Bu ay kredi kullanan ya da limiti olan kişi yok.") } }
         }
-        if (data.people.isEmpty()) {
-            CcEmptyNote("Bu ay kredi kullanan ya da limiti olan kişi yok.")
-        }
-        data.people.forEach { person ->
-            CcPersonCard(person, data.canManageLimits) { onEdit(person) }
-        }
-        data.unattributed?.let { un ->
-            Row(
-                Modifier.fillMaxWidth().glassCard(18.dp).padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                DfyIcon("questionmark.circle", tint = DS.Colors.slate400)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("Kişiye bağlanamayan kullanım", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                    Text("Eski ya da sistemin yaptığı işlemler — kişi limitine sayılmaz.", style = sys(12), color = DS.Colors.onSurfaceVariant)
+        val sutun = if (icGenislik(tamW, OZET_EN) >= GENIS_ICERIK) 2 else 1
+        if (sutun == 1) {
+            data.people.forEach { person ->
+                item(key = "kisiKarti-${person.id}", contentType = "kisi") {
+                    CcPersonCard(person, canEdit = data.canManageLimits, onEdit = { onEdit(person) }, modifier = Modifier.bolum(OZET_EN))
                 }
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("${creditText(un.credits)} kredi", style = sys(14, FontWeight.Bold).monoDigits(), color = DS.Colors.onSurface)
-                    Text("${un.operations} işlem", style = sys(11), color = DS.Colors.onSurfaceVariant)
+            }
+        } else {
+            data.people.chunked(sutun).forEach { satir ->
+                item(key = "kisiSatiri-" + satir.joinToString("|") { it.id }, contentType = "kisiSatiri") {
+                    EsitSatir(
+                        satir, sutun, 16.dp,
+                        { person, m -> CcPersonCard(person, data.canManageLimits, { onEdit(person) }, m, esitYukseklik = true) },
+                        Modifier.bolum(OZET_EN),
+                    )
                 }
             }
         }
+        data.unattributed?.let { un ->
+            item(key = "kisi-atanmamis", contentType = "atanmamis") { Box(Modifier.bolum(OZET_EN)) { CcUnattributedRow(un) } }
+        }
+        if (data.nextCursor != null) {
+            item(key = "kisi-daha", contentType = "daha") { Box(Modifier.bolum(OZET_EN)) { CcMoreButton(onMore) } }
+        }
     } else if (error != null) {
-        CcErrorCard("Kişi kullanımı yüklenemedi", error, onRetry)
-    } else {
-        CcLoadingBlock()
+        item(key = "kisi-hata", contentType = "hata") { Box(Modifier.bolum(OZET_EN)) { CcErrorCard("Kişi kullanımı yüklenemedi.", error, onRetry) } }
+    } else if (CreditCenterStore.Parca.people !in store.gizli) {
+        item(key = "kisi-yukleniyor", contentType = "yukleniyor") { Box(Modifier.bolum(OZET_EN)) { CcLoadingBlock() } }
     }
-
-    CcFootnote("Bu ekranı varsayılan olarak yalnız klinik sahibi görür. Bir departmana açmak için web'de Ayarlar › Yetki Ayarları'nda, tek bir kişiye açmak için Ayarlar › Kullanıcı Ayarları'nda “Kredi Yönetimi'ni görüntüleme” yetkisini verin; " +
-        if (AppConfig.inAppPurchase) "limit düzenleme ve kredi satın alma ayrı yetkilerdir." else "limit düzenleme ayrı bir yetkidir.")
 }
 
-// MARK: - Yükle
+// MARK: - Kredi Yükle (yalnız `fin.credits`)
 
-@Composable
-private fun TopUp(
+private fun LazyListScope.krediYukle(
     store: CreditCenterStore,
     credits: SmileCreditsStore,
+    wallet: SmileWallet?,
     purchased: SmilePurchaseResult?,
+    tamW: Dp,
     onBuy: (SmileCreditPack) -> Unit,
+    onTerms: (CreditTransactionsPage.Row) -> Unit,
     onRetry: () -> Unit,
 ) {
-    val u = store.usage
-    val error = store.usageError
-    if (u != null) {
-        CcWalletCard(u.wallet)
-        AnimatedVisibility(purchased != null, enter = fadeIn(Motion.spring(0.4, 0.85))) {
-            purchased?.let { p ->
-                CcBanner(
-                    "checkmark.seal.fill", DS.Colors.tertiaryContainer,
-                    "${creditText(p.creditsGranted)} kredi eklendi. ${SmileCreditFormat.lira(p.priceTL)} bu ayın Dentifay faturanıza yansıyacak.",
+    val w = wallet
+    val error = credits.errorMessage
+    if (w != null) {
+        item(key = "yukle-cuzdan", contentType = "cuzdan") { Box(Modifier.bolum(LISTE_EN)) { CcWalletCard(w) } }
+        if (purchased != null) {
+            item(key = "yukle-eklendi", contentType = "banner") {
+                Box(Modifier.animateItem().bolum(LISTE_EN)) {
+                    CcBanner("checkmark.seal.fill", DS.Colors.tertiaryContainer, "${creditText(purchased.creditsGranted)} kredi eklendi.")
+                }
+            }
+        }
+        val m = w.thisMonth
+        val tl = m?.purchasedTL
+        if (m != null && tl != null) {
+            item(key = "yukle-fatura", contentType = "not") {
+                Text(
+                    "${CreditDates.monthLabel(m.period)} faturasına yansıyacak: ${SmileCreditFormat.lira(tl)}",
+                    Modifier.bolum(LISTE_EN), style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant,
                 )
             }
         }
-        CcSectionHeader("KREDİ PAKETLERİ")
-        if (!u.canPurchase) {
-            CcBanner(
-                "person.badge.key.fill", DS.Colors.orange400,
-                if (u.purchaseBlockedReason == "DEMO") "Demo hesapta kredi satın alınamaz; ek kredi için Dentifay ile iletişime geçin."
-                else "Kredi satın alma yetkiniz yok; klinik sahibine başvurun.",
-            )
+        item(key = "yukle-baslik", contentType = "baslik") { CcSectionHeader("KREDİ PAKETLERİ", Modifier.bolum(LISTE_EN)) }
+        w.purchaseBlockedMessage?.let { msg ->
+            item(key = "yukle-engel", contentType = "banner") {
+                Box(Modifier.bolum(LISTE_EN)) { CcBanner("person.badge.key.fill", DS.Colors.orange400, msg) }
+            }
         }
-        u.packs.forEach { pack ->
-            CcPackCard(pack, enabled = u.canPurchase && !credits.isPurchasing) { onBuy(pack) }
-        }
-        CcFootnote("Ödeme uygulamada alınmaz: paket bedeli ay sonunda kliniğinizin Dentifay faturasına yansır. Başarısız işlemin kredisi otomatik iade edilir.")
-        if (u.wallet.isDemo == true) {
-            CcFootnote("Demo hesapta diğer özellikler sabit tarifeyle düşer; her düşüm Hareketler bölümünde görünür.")
-        }
-
-        CcCard("Son yüklemeler", monthSubtitle(u.wallet.thisMonth)) {
-            val purchasesError = store.purchasesError
-            if (store.purchases.isEmpty() && purchasesError != null) {
-                Text(purchasesError, style = sys(12), color = DS.Colors.error)
-            } else if (store.purchases.isEmpty()) {
-                Text("Son bir yılda kredi yüklemesi yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    store.purchases.forEach { r ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("${creditText(r.credits)} kredi", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                                Text(
-                                    listOfNotNull(CreditDates.short(r.at, store.clinicTimeZone), r.user?.displayName).joinToString(" · "),
-                                    style = sys(11), color = DS.Colors.onSurfaceVariant,
-                                )
-                            }
-                            Text(r.priceTL?.let { SmileCreditFormat.lira(it) } ?: "—", style = sys(14, FontWeight.Bold).monoDigits(), color = DS.Colors.onSurface)
-                        }
-                    }
+        // Paketler: telefonda tek sütun, genişledikçe 2–3 sütun (en az 300 dp hücre).
+        val icW = icGenislik(tamW, LISTE_EN)
+        val sutun = ((icW + 12.dp) / (300.dp + 12.dp)).toInt().coerceIn(1, 3)
+        w.packs.chunked(sutun).forEach { satir ->
+            item(key = "paketSatiri-" + satir.joinToString("|") { it.id }, contentType = "paketSatiri") {
+                val buyable: (SmileCreditPack) -> Boolean = { p -> w.canPurchase && p.priceTL != null && !credits.isPurchasing }
+                if (sutun == 1) {
+                    val p = satir.first()
+                    CcPackCard(p, enabled = buyable(p), onBuy = { onBuy(p) }, modifier = Modifier.bolum(LISTE_EN))
+                } else {
+                    EsitSatir(
+                        satir, sutun, 12.dp,
+                        { p, mod -> CcPackCard(p, enabled = buyable(p), onBuy = { onBuy(p) }, modifier = mod) },
+                        Modifier.bolum(LISTE_EN),
+                    )
                 }
             }
         }
+        item(key = "yukle-not", contentType = "not") {
+            CcFootnote("Ödeme uygulamada alınmaz: paket bedeli ay sonunda kliniğinizin Dentifay faturasına yansır.", Modifier.bolum(LISTE_EN))
+        }
 
-        CcCard("Fiyat listesi", "Her işlemin kaç kredi düştüğü") {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                u.priceCatalog.forEach { p ->
-                    Row(verticalAlignment = Alignment.Top) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(CreditLabels.feature(p.feature), style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
-                            Text(
-                                listOfNotNull(CreditLabels.action(p.feature, p.action), CreditLabels.unit(p.unit)).joinToString(" · "),
-                                style = sys(11), color = DS.Colors.onSurfaceVariant,
-                            )
+        if (CreditCenterStore.Parca.purchases !in store.gizli) {
+            item(key = "yukle-son", contentType = "sonYuklemeler") {
+                CcCard("Son yüklemeler", null, Modifier.bolum(LISTE_EN)) {
+                    val purchasesError = store.purchasesError
+                    if (store.purchases.isEmpty() && purchasesError != null) {
+                        Text(purchasesError, style = sys(12), color = DS.Colors.error)
+                    } else if (store.purchases.isEmpty()) {
+                        Text("Son bir yılda kredi yüklemesi yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
+                    } else {
+                        Column {
+                            store.purchases.forEach { r -> CcLedgerRow(r, showTerms = true, onTerms = { onTerms(r) }) }
                         }
-                        // "Ücretsiz" · "2 kredi" · "1–2 kredi" (aralıklı) · "+1 kredi" (ek ücret)
-                        Text(
-                            p.priceText,
-                            Modifier.padding(top = 1.dp),
-                            style = sys(13, FontWeight.SemiBold).monoDigits(),
-                            color = if (p.isFree) DS.Colors.tertiaryContainer else DS.Colors.cyan400,
-                        )
                     }
                 }
             }
         }
     } else if (error != null) {
-        CcErrorCard("Kredi bilgisi yüklenemedi", error, onRetry)
-    } else {
-        CcLoadingBlock()
+        item(key = "yukle-hata", contentType = "hata") { Box(Modifier.bolum(LISTE_EN)) { CcErrorCard("Kredi bilgileri yüklenemedi.", error, onRetry) } }
+    } else if (!credits.yetkisiz) {   // kodsuz 403 → parça çizilmez (M-E7.5)
+        item(key = "yukle-yukleniyor", contentType = "yukleniyor") { Box(Modifier.bolum(LISTE_EN)) { CcLoadingBlock() } }
     }
-}
-
-private fun monthSubtitle(m: SmileWallet.Month?): String? {
-    if (m == null) return null
-    var s = "${CreditDates.monthLabel(m.period)} faturasına yansıyacak: ${SmileCreditFormat.lira(m.purchasedTL)}"
-    if (m.purchasedTL > 0) s += if (m.billed) " · faturalandı" else " · ay sonu faturasına"
-    return s
 }
 
 // MARK: - Önizleme
 
+@Composable
+private fun OrnekKrediYonetimi(section: CreditCenterSection) {
+    val store = remember {
+        SmileCreditsStore.shared.ornekYukle(CreditPreviewData.wallet)
+        KrediTarifesiStore.shared.ornekYukle(CreditPreviewData.tarife)
+        CreditCenterStore().apply {
+            ornekYukle(
+                CreditPreviewData.usage, CreditPreviewData.analysis, CreditPreviewData.settings,
+                CreditPreviewData.eBelge, CreditPreviewData.rows, CreditPreviewData.people,
+            )
+        }
+    }
+    CreditCenterContent(store, onDismiss = {}, baslangic = section)
+}
+
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun CreditCenterOverviewPreview() {
-    PreviewEnv {
-        val store = remember {
-            CreditCenterStore().apply { previewFill(CreditPreviewData.usage, CreditPreviewData.people, CreditPreviewData.rows) }
-        }
-        CreditCenterContent(store, onDismiss = {}, initialSection = CreditCenterSection.overview, loadOnAppear = false)
-    }
+    PreviewEnv { OrnekKrediYonetimi(CreditCenterSection.overview) }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun CreditCenterOverviewTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { OrnekKrediYonetimi(CreditCenterSection.overview) }
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun CreditCenterLedgerPreview() {
-    PreviewEnv {
-        val store = remember {
-            CreditCenterStore().apply { previewFill(CreditPreviewData.usage, CreditPreviewData.people, CreditPreviewData.rows) }
-        }
-        CreditCenterContent(store, onDismiss = {}, initialSection = CreditCenterSection.ledger, loadOnAppear = false)
-    }
+    PreviewEnv { OrnekKrediYonetimi(CreditCenterSection.ledger) }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
 @Composable
-private fun CreditCenterPeoplePreview() {
-    PreviewEnv {
-        val store = remember {
-            CreditCenterStore().apply { previewFill(CreditPreviewData.usage, CreditPreviewData.people, CreditPreviewData.rows) }
-        }
-        CreditCenterContent(store, onDismiss = {}, initialSection = CreditCenterSection.people, loadOnAppear = false)
-    }
+private fun CreditCenterPeopleTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { OrnekKrediYonetimi(CreditCenterSection.people) }
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun CreditCenterTopUpPreview() {
-    PreviewEnv {
-        val store = remember {
-            CreditCenterStore().apply { previewFill(CreditPreviewData.usage, CreditPreviewData.people, CreditPreviewData.rows) }
-        }
-        CreditCenterContent(store, onDismiss = {}, initialSection = CreditCenterSection.topUp, loadOnAppear = false)
-    }
+    PreviewEnv { OrnekKrediYonetimi(CreditCenterSection.topUp) }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 800, heightDp = 1280)
+@Composable
+private fun CreditCenterTopUpTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_DIKEY) { OrnekKrediYonetimi(CreditCenterSection.topUp) }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 360, heightDp = 640, fontScale = 1.3f)
+@Composable
+private fun CreditCenterSmallPhonePreview() {
+    PreviewEnv(pencere = PencereBilgisi(360.dp, 640.dp)) { OrnekKrediYonetimi(CreditCenterSection.people) }
 }

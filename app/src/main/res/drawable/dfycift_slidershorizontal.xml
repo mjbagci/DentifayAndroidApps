@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/SlidersHorizontal.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 9.25 14 C 10.9069 14 12.25 15.3431 12.25 17 C 12.25 18.6569 10.9069 20 9.25 20 C 7.59315 20 6.25 18.6569 6.25 17 C 6.25 15.3431 7.59315 14 9.25 14 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M 14.25 4 C 12.5931 4 11.25 5.34315 11.25 7 C 11.25 8.65685 12.5931 10 14.25 10 C 15.9069 10 17.25 8.65685 17.25 7 C 17.25 5.34315 15.9069 4 14.25 4 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M 17.1658 7.7085 C 17.2208 7.48132 17.25 7.24405 17.25 6.99997 C 17.25 6.72602 17.2133 6.46064 17.1445 6.2085 H 21.75 C 22.1642 6.2085 22.5 6.54428 22.5 6.9585 C 22.5 7.37271 22.1642 7.7085 21.75 7.7085 L 17.1658 7.7085 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 11.3555 6.2085 C 11.2867 6.46064 11.25 6.72602 11.25 6.99997 C 11.25 7.24405 11.2791 7.48132 11.3342 7.7085 L 1.75 7.7085 C 1.33579 7.7085 1 7.37271 1 6.9585 C 1 6.54428 1.33579 6.2085 1.75 6.2085 H 11.3555 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 6.35551 16.2085 H 1.75 C 1.33579 16.2085 1 16.5443 1 16.9585 C 1 17.3727 1.33579 17.7085 1.75 17.7085 H 6.33416 C 6.27915 17.4813 6.25 17.2441 6.25 17 C 6.25 16.726 6.28672 16.4606 6.35551 16.2085 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 12.1658 17.7085 H 21.75 C 22.1642 17.7085 22.5 17.3727 22.5 16.9585 C 22.5 16.5443 22.1642 16.2085 21.75 16.2085 H 12.1445 C 12.2133 16.4606 12.25 16.726 12.25 17 C 12.25 17.2441 12.2209 17.4813 12.1658 17.7085 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+</vector>

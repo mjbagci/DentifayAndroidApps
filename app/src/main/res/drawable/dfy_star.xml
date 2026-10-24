@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Star.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="m 13.728 3.444 l 1.76 3.549 c .24 .494 .88 .968 1.42 1.058 l 3.189 .535 c 2.04 .343 2.52 1.835 1.05 3.307 l -2.48 2.5 c -.42 .423 -.65 1.24 -.52 1.825 l .71 3.095 c .56 2.45 -.73 3.397 -2.88 2.117 l -2.99 -1.785 c -.54 -.322 -1.43 -.322 -1.98 0 L 8.019 21.43 c -2.14 1.28 -3.44 .322 -2.88 -2.117 l .71 -3.095 c .13 -.585 -.1 -1.402 -.52 -1.825 l -2.48 -2.5 C 1.39 10.42 1.86 8.929 3.899 8.586 l 3.19 -.535 c .53 -.09 1.17 -.564 1.41 -1.058 l 1.76 -3.549 c .96 -1.925 2.52 -1.925 3.47 0"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

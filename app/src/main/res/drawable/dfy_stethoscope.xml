@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Stethoscope.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 13.001 2 c 1.104 0 2 .931 2 2.08 c 0 .95 .035 1.794 -.732 2.492 C 11.76 8.857 10.503 10 9 10 S 6.242 8.857 3.731 6.572 c -.767 -.698 -.73 -1.543 -.73 -2.492 C 3 2.93 3.894 2 4.998 2 M 9 14 v 3.5 a 4.5 4.5 0 0 0 9 0 V 16"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="m 14 7 l -1.302 3.256 c -.346 .865 -.52 1.298 -.81 1.653 c -.29 .356 -.678 .612 -1.456 1.126 L 8.97 14 l -1.437 -.968 c -.76 -.512 -1.141 -.768 -1.425 -1.12 c -.283 -.35 -.454 -.776 -.794 -1.628 L 4 7"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 21 13 a 3 3 0 1 1 -6 0 a 3 3 0 0 1 6 0 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5" />
+    <path
+        android:pathData="M 18.125 13 H 18 m .25 0 a .25 .25 0 1 1 -.5 0 a .25 .25 0 0 1 .5 0"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

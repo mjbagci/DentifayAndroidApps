@@ -34,15 +34,17 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 /**
- * Sunucu (Azure) TTS hattı. Cümle cümle kuyruk + 4-ileri prefetch.
+ * Sunucu (Azure) TTS hattı — YALNIZ Tedavi Planı önizleme özetini okur (karar 9;
+ * `docs/MOBILE_TTS_CONTRACT.md`). Cümle cümle kuyruk + 4-ileri prefetch.
  *
  * - Birincil: `POST /api/ai/tts` → tam mp3 (backend Azure'ı proxy'ler; anahtar
- *   sunucuda kalır). mp3 → **VoiceAudioGraph oynatıcısı** (iletişim kullanımı → AEC referansı).
+ *   sunucuda kalır). mp3 → **VoiceAudioGraph oynatıcısı** (`flush` ile birlikte kesilir).
  * - Fallback: backend 503/erişilemez → Android `TextToSpeech` (cihaz sesi, tr-TR).
- *   ⚠️ Fallback sırasında üst katman mikrofonu kapatır (faz .speaking).
+ *   ⚠️ Fallback grafikten GEÇMEZ; bu sırada üst katman mikrofonu kapatır.
  * - `TTS_TEXT_TOO_LONG` (400): metni ortadan böl, iki çağrıyla tamamla.
  * - `TTS_DAILY_QUOTA` (429): günlük seslendirme hakkı doldu → cihaz sesi; kuyruk boşalana
- *   dek sunucu yeniden denenmez, `onNotice` kullanıcıya nedeni söyler. 402 gelirse aynı biçimde.
+ *   dek sunucu yeniden denenmez, `onNotice` kullanıcıya nedeni söyler. Seslendirmenin kredi
+ *   tarifesi yoktur; yine de 402 gelirse aynı biçimde cihaz sesine düşülür.
  * - Barge-in: `flush()` kuyruğu + prefetch'i + çalan sesi tamamen temizler.
  */
 class TTSPipeline(private val graph: VoiceAudioGraph) {
@@ -174,7 +176,7 @@ class TTSPipeline(private val graph: VoiceAudioGraph) {
         if (gen == generation) draining = false
         if (gen == generation && nextIndex >= queue.size && started) {
             queue.clear(); nextIndex = 0
-            serverPaused = false   // sonraki tur sunucuyu yeniden dener
+            serverPaused = false   // sonraki okuma sunucuyu yeniden dener (kota ertesi gün yenilenir)
             onFinishedAll?.invoke()
         }
     }
@@ -326,8 +328,8 @@ class TTSPipeline(private val graph: VoiceAudioGraph) {
             return t.trim()
         }
 
-        /** Türkçe cümle bölme (kaba): . ! ? … sonrası. Backend zaten `speak_delta`'yı cümle cümle
-         *  gönderdiği için normal yolda tek cümle gelir; bu yalnız uzun monolitik `speak` için yedek. */
+        /** Türkçe cümle bölme (kaba): . ! ? … sonrası. Kısaltmaları korumaz; önizleme özeti
+         *  (`ozet`, ≤ 280) çoğunlukla tek cümledir — bu uzun metin için yedek. */
         fun splitSentences(text: String): List<String> {
             val trimmed = text.trim()
             if (trimmed.isEmpty()) return emptyList()

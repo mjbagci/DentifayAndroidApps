@@ -3,6 +3,7 @@ package com.dentifay.app.xray
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -13,7 +14,10 @@ import com.dentifay.app.core.AppConfig
 import com.dentifay.app.core.CreditRequired
 import com.dentifay.app.core.DfyJson
 import com.dentifay.app.core.SessionEvents
+import com.dentifay.app.core.Yetki
+import com.dentifay.app.core.YetkiReddi
 import com.dentifay.app.core.obj
+import com.dentifay.app.core.serverSentence
 import com.dentifay.app.core.str
 import com.dentifay.app.theme.Haptics
 import com.dentifay.app.trial.GuestTrialClient
@@ -46,7 +50,10 @@ import java.util.concurrent.TimeUnit
  * (ekran/negatoskop/arayüzden ayrılır, perspektifi düzeltilir, moiré temizlenir, tonu
  * dengelenir) → önizleme (istenirse köşeler elle düzeltilir) → analiz → diş diş bulgular. İki kip:
  * - `guest`: giriş ekranındaki ücretsiz deneme (`/api/public/trial/xray/analyze`, IP başına hak).
- * - `clinic`: oturumlu klinik — röntgen hastanın dosyasına yüklenir, analiz AI kredisinden düşer.
+ * - `clinic`: oturumlu klinik — röntgen hastanın dosyasına yüklenir, analiz kliniğin kredisinden düşer
+ *   (kredi yetmezse 402 → kredi kartı; demoda 403 `DEMO_CREDITS_EXHAUSTED` → demo kartı; kodsuz 403 yetki).
+ *
+ * Görüntü işleri (çözme, ayrıştırma, düzleştirme, JPEG) hep `Dispatchers.Default`'ta; ana iş parçacığı yalnız durumu yazar.
  */
 class XrayAnalysisViewModel(val mode: Mode) {
 
@@ -73,6 +80,12 @@ class XrayAnalysisViewModel(val mode: Mode) {
 
     // Görsel
     var original: Bitmap? by mutableStateOf(null)
+        private set
+    /**
+     * Ekranda gösterilen küçültülmüş kopya (alan seçimi, büyüteç, "Orijinal fotoğraf") — 4096 px'lik görsel her karede
+     * yeniden örneklenmesin. Analize her zaman `original` gider.
+     */
+    var originalPreview: Bitmap? by mutableStateOf(null)
         private set
     /** Seçilen alan (normalize köşeler). */
     var quad: XrayQuad by mutableStateOf(XrayQuad.full)
@@ -138,21 +151,30 @@ class XrayAnalysisViewModel(val mode: Mode) {
     fun dispose() { cancel(); searchTask?.cancel(); scope.cancel() }
 
     // MARK: Türetilmiş
+    // Swift'te hesaplanan özellikler; burada `derivedStateOf` — sonuç ya da duyarlılık değişmedikçe yeniden kurulmaz
+    // (sonuç ekranı her çizimde bunları birkaç kez okur).
 
-    val findings: List<XrayToothFinding> get() = result?.findings(sensitivity.rawValue) ?: emptyList()
-    val visibleFindings: List<XrayToothFinding>
-        get() = if (showHealthy) findings else findings.filter {
+    private val findingsState = derivedStateOf { result?.findings(sensitivity.rawValue) ?: emptyList() }
+    val findings: List<XrayToothFinding> get() = findingsState.value
+
+    private val visibleFindingsState = derivedStateOf {
+        val all = findingsState.value
+        if (showHealthy) all else all.filter {
             it.kind == XrayToothFinding.Kind.finding || it.kind == XrayToothFinding.Kind.existing || it.kind == XrayToothFinding.Kind.missing
         }
+    }
+    val visibleFindings: List<XrayToothFinding> get() = visibleFindingsState.value
+
     val toothCount: Int get() = findings.count { !it.isSynthetic }
     val findingCount: Int get() = findings.sumOf { it.recs.size }
-    val findingTeeth: List<XrayToothFinding>
-        get() = findings.filter { it.recs.isNotEmpty() }
-            .sortedWith { a, b ->
-                val pa = a.recs.minOfOrNull { XrayCatalog.priority[it.cls] ?: 9 } ?: 9
-                val pb = b.recs.minOfOrNull { XrayCatalog.priority[it.cls] ?: 9 } ?: 9
-                if (pa == pb) a.fdi.compareTo(b.fdi) else pa.compareTo(pb)
-            }
+
+    private val findingTeethState = derivedStateOf { findingsState.value.byTreatmentPriority() }
+    val findingTeeth: List<XrayToothFinding> get() = findingTeethState.value
+
+    /** Önerisi olmayan, yalnız mevcut restorasyonlu dişler (sonuç ekranının açılır bölümü). */
+    private val existingOnlyState = derivedStateOf { findingsState.value.filter { it.recs.isEmpty() && it.existing.isNotEmpty() } }
+    val existingOnly: List<XrayToothFinding> get() = existingOnlyState.value
+
     val existingCount: Int get() = findings.sumOf { it.existing.size }
     val selectedTooth: XrayToothFinding? get() = findings.firstOrNull { it.id == selectedToothID }
     /** Az bulgulu, çok dişli sonuç → duyarlılığı düşürmeyi öner (web "Hassasiyeti Düşür"). */
@@ -183,16 +205,23 @@ class XrayAnalysisViewModel(val mode: Mode) {
         start(source, hint) { XrayImageProcessor.load(data) }
     }
 
+    /** Örnek röntgen — çözme de arka planda (ana iş parçacığında 1,3 MP çözülmesin). */
     fun loadSample(context: Context) {
-        val opts = BitmapFactory.Options().apply { inScaled = false; inPreferredConfig = Bitmap.Config.ARGB_8888 }
-        val img = BitmapFactory.decodeResource(context.resources, R.drawable.xray_sample, opts) ?: return
-        load(img, Source.sample)
+        val res = context.applicationContext.resources
+        start(Source.sample, null) {
+            val opts = BitmapFactory.Options().apply { inScaled = false; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+            val img = BitmapFactory.decodeResource(res, R.drawable.xray_sample, opts) ?: throw XrayImageProcessor.ProcessingError.unreadable()
+            XrayImageProcessor.normalized(img)
+        }
     }
+
+    /** Arka plandaki ayrıştırmanın çıktısı. */
+    private class Located(val image: Bitmap, val preview: Bitmap, val detected: XrayQuad?, val photo: Boolean)
 
     private fun start(source: Source, hint: XrayQuad?, make: () -> Bitmap) {
         cancel()
         this.source = source
-        result = null; prepared = null; original = null; detectedQuad = null; selectedToothID = null
+        result = null; prepared = null; original = null; originalPreview = null; detectedQuad = null; selectedToothID = null
         quality = XrayQualityReport(); needsManualCrop = false
         phase = Phase.preparing
         val fromCamera = source == Source.camera
@@ -201,22 +230,25 @@ class XrayAnalysisViewModel(val mode: Mode) {
                 // Fotoğraf mı dijital dosya mı içerikten anlaşılır (galerideki WhatsApp röntgeni
                 // dijitaldir, dosyalardaki ekran fotoğrafı fotoğraftır). Fotoğrafta önce ekran
                 // deseni (moiré) temizlenir, sonra röntgen ayrıştırılır.
-                val (image, detected, photo) = withContext(Dispatchers.Default) {
+                val located = withContext(Dispatchers.Default) {
                     val raw = make()
                     val photo = fromCamera || XrayImageProcessor.isPhotograph(raw)
                     ensureActive()
                     val cg = if (photo) XrayImageProcessor.removeScreenPattern(raw) else raw
                     ensureActive()
-                    Triple(cg, XrayImageProcessor.locate(cg, photo, hint), photo)
+                    val detected = XrayImageProcessor.locate(cg, photo, hint)
+                    ensureActive()
+                    Located(cg, XrayImageProcessor.displayCopy(cg), detected, photo)
                 }
                 ensureActive()
-                original = image
-                detectedQuad = detected
-                quad = detected ?: XrayQuad.full
-                isPhoto = photo
-                _enhance = photo
+                original = located.image
+                originalPreview = located.preview
+                detectedQuad = located.detected
+                quad = located.detected ?: XrayQuad.full
+                isPhoto = located.photo
+                _enhance = located.photo
                 Haptics.light()
-                if (photo && detected == null) {
+                if (located.photo && located.detected == null) {
                     // Fotoğrafta röntgen bulunamadı: tüm fotoğraf analize gitmesin, köşeler elle seçilsin.
                     needsManualCrop = true
                     phase = Phase.adjust
@@ -243,10 +275,14 @@ class XrayAnalysisViewModel(val mode: Mode) {
         work?.cancel()
         val photo = isPhoto
         work = scope.launch {
-            val rotated = withContext(Dispatchers.Default) { XrayImageProcessor.rotatedClockwise(original) } ?: return@launch
+            val rotated = withContext(Dispatchers.Default) {
+                val r = XrayImageProcessor.rotatedClockwise(original) ?: return@withContext null
+                r to XrayImageProcessor.displayCopy(r)
+            } ?: return@launch
             if (!isActive) return@launch
-            this@XrayAnalysisViewModel.original = rotated
-            val q = withContext(Dispatchers.Default) { XrayImageProcessor.locate(rotated, photo) }
+            this@XrayAnalysisViewModel.original = rotated.first
+            originalPreview = rotated.second
+            val q = withContext(Dispatchers.Default) { XrayImageProcessor.locate(rotated.first, photo) }
             detectedQuad = q
             quad = q ?: XrayQuad.full
         }
@@ -273,6 +309,8 @@ class XrayAnalysisViewModel(val mode: Mode) {
             try {
                 val (out, report) = withContext(Dispatchers.Default) {
                     val out = XrayImageProcessor.prepare(original, quad, enhance)
+                    // Önizleme ve sonuç tuvali 2600 px'lik görüntüyü küçülterek çizer: kademeli örnekleme (örtüşme olmasın).
+                    out.setHasMipMap(true)
                     out to XrayImageProcessor.assessQuality(out)
                 }
                 ensureActive()
@@ -371,7 +409,7 @@ class XrayAnalysisViewModel(val mode: Mode) {
 
     fun reset() {
         cancel()
-        original = null; prepared = null; result = null; detectedQuad = null; quad = XrayQuad.full
+        original = null; originalPreview = null; prepared = null; result = null; detectedQuad = null; quad = XrayQuad.full
         selectedToothID = null; creditRequired = null; lastError = null
         quality = XrayQualityReport(); needsManualCrop = false
         phase = Phase.pickSource
@@ -433,18 +471,34 @@ class XrayAnalysisViewModel(val mode: Mode) {
         patientResults = emptyList()
         Haptics.selection()
     }
+
+    // MARK: - Önizleme (yalnız @Preview)
+
+    /** Önizlemelerde sonuç ekranını ağsız göstermek için: hazır görüntü + sonuç. */
+    internal fun onizlemeSonucu(gorsel: Bitmap, sonuc: XrayResult, hasta: PatientRef? = null) {
+        prepared = gorsel
+        result = sonuc
+        patient = hasta ?: patient
+        phase = Phase.results
+    }
 }
 
 // MARK: - Klinik istemcisi (oturum çereziyle)
 
-/** `POST /api/patients/:id/xray` (yükle) → `POST /api/patients/:id/xray/:xid/analyze` (4 kredi). */
+/** `POST /api/patients/:id/xray` (yükle) → `POST /api/patients/:id/xray/:xid/analyze` (kredi). */
 class XrayClinicClient {
 
     sealed class ClinicError(message: String) : Exception(message) {
         class noPatient : ClinicError("Önce hastayı seçin.")
         class sessionExpired : ClinicError("Oturumunuz sona ermiş. Tekrar giriş yapıp deneyin.")
-        class forbidden : ClinicError("Bu hesabın röntgen analizi yetkisi yok.")
-        class server(m: String?) : ClinicError(m ?: "Röntgen analizi tamamlanamadı. Tekrar deneyin.")
+        /**
+         * 403 — sunucunun cümlesi (`Yetki.yasakMetni`): kodsuz yetenek reddi "Bu işlem için yetkiniz yok.", iş kodlu 403 sunucunun
+         * kendi cümlesi. Yalnız kodsuz ret `Yetki.reddiMi` sayılır (Swift `Yetki.reddiMi` · `.forbidden(m)`, m == eylemYetkisizMetni).
+         */
+        class forbidden(val m: String) : ClinicError(m), YetkiReddi {
+            override val yetkiReddiMi: Boolean get() = m == Yetki.EYLEM_YETKISIZ_METNI
+        }
+        class server(val m: String?) : ClinicError(m ?: "Röntgen analizi tamamlanamadı. Tekrar deneyin.")
     }
 
     companion object {
@@ -455,6 +509,25 @@ class XrayClinicClient {
                 .writeTimeout(180, TimeUnit.SECONDS)
                 .callTimeout(240, TimeUnit.SECONDS)
                 .build()
+        }
+
+        /**
+         * Yanıt → gövde ya da atılacak hata (saf; birim testli). 402 ve demo 403 → `CreditRequired`; 401 → oturum olayı +
+         * `sessionExpired`; öteki 403 → `forbidden(Yetki.yasakMetni)`; geri kalanı → `server(serverSentence)` (ham kod/JSON yok).
+         */
+        internal fun yanit(status: Int, data: ByteArray, path: String): JsonObject {
+            CreditRequired.parse(status, data)?.let { throw it }
+            val json = runCatching { DfyJson.parseToJsonElement(data.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull()
+                ?: JsonObject(emptyMap())
+            when (status) {
+                in 200..299 -> return json
+                401 -> {
+                    SessionEvents.report401(data, path)
+                    throw ClinicError.sessionExpired()
+                }
+                403 -> throw ClinicError.forbidden(Yetki.yasakMetni(data))
+                else -> throw ClinicError.server(serverSentence(data))
+            }
         }
     }
 
@@ -487,17 +560,6 @@ class XrayClinicClient {
 
     private suspend fun send(req: Request): JsonObject = withContext(Dispatchers.IO) {
         val raw = ApiClient.execute(req, client)
-        CreditRequired.parse(raw.status, raw.body)?.let { throw it }
-        val json = runCatching { DfyJson.parseToJsonElement(raw.body.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull()
-            ?: JsonObject(emptyMap())
-        when (raw.status) {
-            in 200..299 -> json
-            401 -> {
-                SessionEvents.report401(raw.body, req.url.encodedPath)
-                throw ClinicError.sessionExpired()
-            }
-            403 -> throw ClinicError.forbidden()
-            else -> throw ClinicError.server(json.str("error"))
-        }
+        yanit(raw.status, raw.body, req.url.encodedPath)
     }
 }

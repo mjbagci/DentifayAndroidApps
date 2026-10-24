@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Inbox.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 2.5 12 c 0 -4.478 0 -6.718 1.391 -8.109 S 7.521 2.5 12 2.5 c 4.478 0 6.718 0 8.109 1.391 S 21.5 7.521 21.5 12 c 0 4.478 0 6.718 -1.391 8.109 S 16.479 21.5 12 21.5 c -4.478 0 -6.718 0 -8.109 -1.391 S 2.5 16.479 2.5 12"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 21.5 13.5 h -4.926 c -.842 0 -1.503 .704 -1.875 1.447 c -.403 .808 -1.21 1.553 -2.699 1.553 s -2.296 -.745 -2.7 -1.553 c -.37 -.743 -1.032 -1.447 -1.874 -1.447 H 2.5"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineJoin="round" />
+</vector>

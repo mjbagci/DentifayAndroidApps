@@ -3,6 +3,10 @@ package com.dentifay.app.smile
 import com.dentifay.app.core.ApiClient
 import com.dentifay.app.core.ApiException
 import com.dentifay.app.core.DfyJson
+import com.dentifay.app.core.Kurulum
+import com.dentifay.app.core.Yetki
+import com.dentifay.app.core.YetkiReddi
+import com.dentifay.app.core.str
 import com.dentifay.app.credit.SmileCreditFormat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -44,9 +48,10 @@ import kotlin.time.Duration.Companion.seconds
  * Secrets.properties), canlıda Dentifay sunucusu üzerinden (`/api/ai/smile/...`;
  * anahtar yalnızca sunucuda, istek oturum çereziyle yetkilendirilir). İstek ve
  * yanıt biçimleri iki yolda aynıdır; sunucu kie.ai yanıtını olduğu gibi döner.
- * Sunucu yolunda her görev kliniğin AI kredisinden düşer (ilk 30 kredi
- * ücretsiz); kredi bitince sunucu 402 `INSUFFICIENT_CREDIT` döner, başarısız
- * görevin kredisi iade edilir, otomatik yerleşim düzeltmesi ücretsizdir.
+ * Sunucu yolunda kredi görev BAŞLAYINCA sunucuda düşer — görev tamamlansa da tamamlanmasa da (DentAIWeb Ekleme 19 ·
+ * 38D; Mobil Ekleme 3). Bedel güne bağlıdır: istek ekranda gösterilen sayıyı `beklenenKredi` ile taşır, sunucu bedel
+ * değiştiyse 409 `E_CREDIT_PRICE_CHANGED` döner (görev açılmaz). Kredi bitince 402 `INSUFFICIENT_CREDIT` (kişi limiti
+ * dolunca `CREDIT_LIMIT_REACHED`); otomatik yerleşim düzeltmesi ücretsizdir. Doğrudan yol yalnız geliştirme derlemesindedir.
  */
 class KieImageEditClient(val endpoint: Endpoint) {
 
@@ -67,29 +72,44 @@ class KieImageEditClient(val endpoint: Endpoint) {
         data class guest(val baseURL: String) : Endpoint()
     }
 
-    sealed class KieError : Exception() {
+    /**
+     * `YetkiReddi`: yalnız `forbidden` kodsuz yetki reddidir (Swift `Yetki.reddiMi` listesi) — veri parçası çizilmez,
+     * kırmızı "tekrar dene" kartı yok (M-E7.5).
+     */
+    sealed class KieError : Exception(), YetkiReddi {
         object missingAPIKey : KieError()
         object unauthorized : KieError()
         object sessionExpired : KieError()
         object forbidden : KieError()
         object notConfiguredOnServer : KieError()
-        /** Geliştirme yolu: kie.ai hesabının kendisinde kredi yok. */
+        /** Geliştirme yolu: geliştirme hesabında kredi yok. */
         object insufficientCredits : KieError()
-        /** Sunucu yolu: kliniğin AI kredisi bu tasarıma yetmiyor → kredi al. */
+        /** Sunucu yolu: kliniğin kredisi bu tasarıma yetmiyor. */
         data class clinicCreditsExhausted(val required: Double?, val available: Double?) : KieError()
         /**
-         * Sunucu yolu: kişinin AYLIK kredi limiti (Kredi Yönetimi) bu tasarıma yetmiyor.
-         * Kredi satın almak bunu AÇMAZ — limiti klinik sahibi değiştirir.
+         * Sunucu yolu: kişinin AYLIK kredi limiti doldu (sunucu üretir — 35F.3). Metin sunucunun `message`ı
+         * (Swift `message:` — Kotlin'de `Exception.message` ile çakışmasın diye `serverMessage`).
          */
-        data class personalLimitReached(val limit: Double?, val used: Double?, val required: Double?) : KieError()
+        data class personalLimitReached(
+            val limit: Double?,
+            val used: Double?,
+            val required: Double?,
+            val serverMessage: String?,
+        ) : KieError()
         /** Sunucu yolu: yapay zeka sağlayıcısı geçici olarak kullanılamıyor. */
         object providerUnavailable : KieError()
         object hourlyLimit : KieError()
         object rateLimited : KieError()
         data class contentRejected(val detail: String?) : KieError()
         data class generationFailed(val detail: String?) : KieError()
-        /** Sunucu yolu: görev başarısız oldu ve kredisi iade edildi. */
+        /** Sunucu yolu: görev HİÇ AÇILAMADI ve sunucu `refunded: true` dedi — kredi düşmedi (Ek MO3.3). */
         data class refunded(val detail: String?) : KieError()
+        /** Sunucu yolu: görev açıldıktan sonra başarısız oldu — kredi düşmüştür, iade YOK (Ek MO3.4). */
+        object failedAfterStart : KieError()
+        /** Sunucu yolu: 409 `E_CREDIT_PRICE_CHANGED` — bedel güncellendi, görev başlamadı (Ek MO3.1). */
+        data class priceChanged(val credits: Double?) : KieError()
+        /** Sunucu yolu: 503 `E_CREDIT_FX_MISSING` / `E_CREDIT_PRICE_MISSING` — bedel şu an hesaplanamıyor, görev başlamadı (Ek MO3.2). */
+        object fxMissing : KieError()
         /** Ücretsiz deneme: hak bitti → iletişim ekranı. */
         object trialExhausted : KieError()
         /** Ücretsiz deneme: kapasite doldu / servis geçici olarak kapalı (hak düşmez). */
@@ -100,38 +120,53 @@ class KieImageEditClient(val endpoint: Endpoint) {
         data class server(val code: Int, val detail: String?) : KieError()
         object badResponse : KieError()
 
+        override val yetkiReddiMi: Boolean get() = this is forbidden
+
         val errorDescription: String get() = message
 
+        /**
+         * Metinler Ek MO.24: sağlayıcı adı, ham kod, sağlayıcının İngilizce metni ve geliştirme anahtarının adı
+         * HİÇBİR metinde yok.
+         */
         override val message: String
             get() = when (this) {
-                missingAPIKey -> "Gülüş simülasyonu için API anahtarı tanımlı değil (Secrets.plist → KieAPIKey)."
+                missingAPIKey -> "Geliştirme anahtarı tanımlı değil."
                 sessionExpired -> "Oturumunuz sona ermiş. Tekrar giriş yapıp deneyin."
-                forbidden -> "Bu hesabın yapay zeka özelliklerini kullanma yetkisi yok (AI_RUN)."
-                notConfiguredOnServer -> "Gülüş simülasyonu sunucuda henüz etkin değil. Sistem yöneticinize bildirin."
-                unauthorized -> "Yapay zeka servisi API anahtarını reddetti. Anahtarı kontrol edin."
-                insufficientCredits -> "Yapay zeka servisinde kredi kalmadı. kie.ai hesabına kredi yükledikten sonra tekrar deneyin."
+                forbidden -> Yetki.EYLEM_YETKISIZ_METNI
+                notConfiguredOnServer -> "Gülüş simülasyonu şu an kullanılamıyor. Dentifay ile iletişime geçin."
+                unauthorized -> "Geliştirme anahtarı reddedildi; anahtarı kontrol edin."
+                insufficientCredits -> "Geliştirme hesabında kredi kalmadı."
                 is clinicCreditsExhausted -> {
                     val need = required?.let { " Bu tasarım ${SmileCreditFormat.credits(it)} kredi" } ?: ""
-                    val have = available?.let { ", kalan krediniz ${SmileCreditFormat.credits(it)}." } ?: (if (need.isEmpty()) "" else ".")
-                    "Yapay zeka krediniz yetersiz.$need$have Kredi alarak devam edebilirsiniz."
+                    val have = available?.let { ", kalan krediniz ${SmileCreditFormat.credits(it)}" } ?: ""
+                    if (need.isEmpty() && have.isEmpty()) "Krediniz yetersiz." else "Krediniz yetersiz.$need$have."
                 }
                 is personalLimitReached -> {
-                    val durum = (used?.let { SmileCreditFormat.credits(it) } ?: "?") + " / " + (limit?.let { SmileCreditFormat.credits(it) } ?: "?")
-                    val need = required?.let { " Bu tasarım ${SmileCreditFormat.credits(it)} kredi." } ?: ""
-                    "Bu ay size tanımlanan kredi limitine ulaştınız ($durum kredi).$need Limiti klinik sahibi Kredi Yönetimi'nden değiştirebilir."
+                    val m = serverMessage
+                    when {
+                        !m.isNullOrEmpty() -> m
+                        limit != null && used != null ->
+                            "Bu ay ${SmileCreditFormat.credits(limit)} kredilik limitinizin ${SmileCreditFormat.credits(used)} kredisini kullandınız."
+                        else -> "Aylık kredi limitiniz doldu."
+                    }
                 }
-                providerUnavailable -> "Yapay zeka servisi şu an yanıt vermiyor. Krediniz ya da deneme hakkınız düşülmedi; biraz sonra tekrar deneyin."
+                providerUnavailable -> "Gülüş simülasyonu servisi şu an yanıt vermiyor. Krediniz ya da deneme hakkınız düşülmedi; biraz sonra tekrar deneyin."
                 hourlyLimit -> "Saatlik simülasyon sınırına ulaşıldı. Bir süre sonra tekrar deneyin."
                 rateLimited -> "Çok fazla istek gönderildi. Birkaç saniye bekleyip tekrar deneyin."
-                is contentRejected -> "Görsel servis tarafından reddedildi." + (detail?.let { " ($it)" } ?: "")
-                is generationFailed -> "Simülasyon oluşturulamadı." + (detail?.let { " ($it)" } ?: "") + " Tekrar deneyin."
-                is refunded -> "Simülasyon oluşturulamadı" + (detail?.let { " ($it)" } ?: "") + ". Krediniz iade edildi; tekrar deneyin."
+                is contentRejected -> "Görsel, içerik kuralları nedeniyle işlenemedi; başka bir fotoğrafla deneyin."
+                is generationFailed -> "Gülüş simülasyonu tamamlanamadı" + (detail?.let { " ($it)" } ?: "") + ". Tekrar deneyin."
+                is refunded -> "Gülüş simülasyonu başlatılamadı; krediniz düşülmedi. Tekrar deneyin."
+                failedAfterStart -> "Gülüş simülasyonu tamamlanamadı. Kullanılan kredi iade edilmez."
+                is priceChanged -> credits?.let { "Kredi bedeli güncellendi: ${SmileCreditFormat.credits(it)} kredi. Devam etmek için yeniden dokunun." }
+                    ?: "Kredi bedeli güncellendi. Devam etmek için yeniden dokunun."
+                fxMissing -> "Kredi bedeli şu an hesaplanamıyor; biraz sonra tekrar deneyin."
                 trialExhausted -> "Ücretsiz deneme hakkınız doldu. Daha fazlası için bizimle iletişime geçin."
                 is trialUnavailable -> detail ?: "Ücretsiz deneme şu an kullanılamıyor. Hakkınız düşülmedi; biraz sonra tekrar deneyin."
                 is trialRefunded -> "Simülasyon oluşturulamadı" + (detail?.let { " ($it)" } ?: "") + ". Hakkınız iade edildi; tekrar deneyin."
-                timedOut -> "Yapay zeka zamanında yanıt vermedi. Tekrar deneyin."
-                is server -> "Yapay zeka servisi hatası ($code)." + (detail?.let { " $it" } ?: "")
-                badResponse -> "Yapay zeka servisinden beklenmeyen yanıt alındı."
+                timedOut -> "Gülüş simülasyonu zamanında tamamlanamadı. Tekrar deneyin."
+                // Sunucunun/sağlayıcının İngilizce `msg`i EKLENMEZ — yalnız kod.
+                is server -> "Gülüş simülasyonu tamamlanamadı (hata $code). Tekrar deneyin."
+                badResponse -> "Gülüş simülasyonundan beklenmeyen yanıt alındı."
             }
     }
 
@@ -193,23 +228,83 @@ class KieImageEditClient(val endpoint: Endpoint) {
         private val guestSession: OkHttpClient by lazy { directSession.newBuilder().build() }
 
         /**
-         * Sağlayıcının İngilizce hata metnini hekimin anlayacağı Türkçeye çevirir
-         * (yoğunlukta sık gelen "The upstream API service timed out…" gibi).
-         * İçerik reddi metni olduğu gibi kalır; `contentRejected` onu ayrıca tanır.
+         * Sağlayıcının İngilizce hata metnini (yoğunlukta sık gelen "The upstream API service timed out…" gibi)
+         * Türkçe kısa açıklamaya çevirir (Ek MO.24i); tanımadığı metinde `null` (çağıran genel cümleye düşer —
+         * ham metin ekrana basılmaz).
          */
-        fun readableFailure(message: String): String {
+        fun readableFailure(message: String): String? {
             val m = message.lowercase()
-            if (m.contains("nsfw") || m.contains("sensitive")) return message
-            if (m.contains("timed out") || m.contains("timeout")) {
-                return "yapay zeka servisi yoğunluk nedeniyle zamanında yanıt vermedi"
-            }
+            if (m.contains("timed out") || m.contains("timeout")) return "servis yoğunluk nedeniyle zamanında yanıt vermedi"
             if (m.contains("busy") || m.contains("overload") || m.contains("capacity") || m.contains("try again")) {
-                return "yapay zeka servisi şu an yoğun"
+                return "servis şu an yoğun"
             }
-            if (m.contains("internal") || m.contains("server error")) {
-                return "yapay zeka servisinde geçici bir hata oluştu"
+            if (m.contains("internal") || m.contains("server error")) return "serviste geçici bir hata oluştu"
+            return null
+        }
+
+        fun icerikReddiMi(message: String): Boolean {
+            val m = message.lowercase()
+            return m.contains("nsfw") || m.contains("sensitive")
+        }
+
+        /** Görev gövdesi (saf — test edilebilir). `fixOf` ve `beklenenKredi` yalnız sunucu yolunda (sağlayıcı tanımaz). */
+        fun gorevGovdesi(
+            model: SmileAIModel,
+            input: JsonObject,
+            fixOf: String?,
+            beklenenKredi: Double?,
+            sunucuYolu: Boolean,
+        ): JsonObject = buildJsonObject {
+            put("model", model.apiModel)
+            put("input", input)
+            if (sunucuYolu && fixOf != null) put("fixOf", fixOf)
+            if (sunucuYolu && beklenenKredi != null) put("beklenenKredi", beklenenKredi)
+        }
+
+        /**
+         * Sunucu yolunun kendi hataları (saf — test edilebilir); eşleşme yoksa `null` (genel çözüme düşer).
+         * Sözleşme §10 (Ekleme 19 · 38D, `ae8e20c6`): gövde `{ code: <http>, msg, error: <kod> }`; 409 `credits` güncel bedeli taşır;
+         * görev sağlayıcıda HİÇ açılamadıysa görev açma yanıtı `refunded: true` (kredi düşmedi — Ek MO3.3).
+         */
+        fun sunucuHatasi(http: Int, json: JsonObject?): KieError? {
+            val serverError = json?.str("error") ?: json?.str("code")
+            if (http !in 200..299 && (json?.get("refunded") as? JsonPrimitive)?.booleanOrNull == true) return KieError.refunded(null)
+            return when {
+                http == 401 -> KieError.sessionExpired
+                // Önce kurulum kapısı (yetki reddi DEĞİL — bekleme ekranı, M-E7.1), sonra yetki reddi.
+                http == 403 && Kurulum.denetle(403, json) -> KieError.server(403, null)
+                http == 403 -> KieError.forbidden
+                http == 402 && serverError == "CREDIT_LIMIT_REACHED" -> KieError.personalLimitReached(
+                    limit = number(json?.get("limitCredits")),
+                    used = number(json?.get("usedCredits")),
+                    required = number(json?.get("requiredCredits")),
+                    serverMessage = json?.str("message"),
+                )
+                http == 402 -> KieError.clinicCreditsExhausted(
+                    required = number(json?.get("requiredCredits")),
+                    available = number(json?.get("availableCredits")),
+                )
+                http == 409 && serverError == "E_CREDIT_PRICE_CHANGED" -> KieError.priceChanged(number(json?.get("credits")))
+                http == 429 && serverError == "SMILE_SIM_HOURLY_CAP_REACHED" -> KieError.hourlyLimit
+                http == 502 -> KieError.providerUnavailable
+                // Kur yok (`E_CREDIT_FX_MISSING`) ya da fiyat listesi yok (`E_CREDIT_PRICE_MISSING`) — kredi düşmez, Ek MO3.2.
+                http == 503 && (serverError == "E_CREDIT_FX_MISSING" || serverError == "E_CREDIT_PRICE_MISSING") -> KieError.fxMissing
+                http == 503 && serverError == "SMILE_SIM_PROVIDER_UNAVAILABLE" -> KieError.providerUnavailable
+                http == 503 -> KieError.notConfiguredOnServer
+                else -> null
             }
-            return message
+        }
+
+        /**
+         * Yoklamada `fail` (saf — test edilebilir): sözleşmeye göre yoklama iade BİLDİRMEZ (`refunded: false`) → sunucu yolunda
+         * kredi düşmüştür (MO3.4). `refunded: true` yalnız görev açma yanıtındadır (`sunucuHatasi`). Misafir yolu bu ekte DEĞİŞMEZ.
+         */
+        fun basarisizGorev(refunded: Boolean, sunucuYolu: Boolean, misafir: Boolean, mesaj: String?): KieError {
+            if (refunded) {
+                if (misafir) return KieError.trialRefunded(mesaj)
+                return KieError.refunded(mesaj)
+            }
+            return if (sunucuYolu && !misafir) KieError.failedAfterStart else KieError.generationFailed(mesaj)
         }
 
         /**
@@ -291,6 +386,7 @@ class KieImageEditClient(val endpoint: Endpoint) {
      * Aynı görsel birden fazla tasarım için tekrar kullanılabilir.
      * `fixOf`: otomatik yerleşim düzeltmesinde asıl görevin kimliği — sunucu
      * yolunda düzeltme bu görevin kredisine sayılır (ek kredi düşmez).
+     * `beklenenKredi`: ekranda gösterilen bedel (sunucu yolu; sunucu farklıysa 409 — M-E3.2).
      */
     suspend fun generate(
         model: SmileAIModel,
@@ -299,11 +395,12 @@ class KieImageEditClient(val endpoint: Endpoint) {
         prompt: String,
         seed: Int? = null,
         fixOf: String? = null,
+        beklenenKredi: Double? = null,
         onStage: (Stage) -> Unit = {},
     ): Generation {
         if (!isUsable) throw KieError.missingAPIKey
         onStage(Stage.queued)
-        val taskId = createTask(model, imageURL, maskURL, prompt, seed, fixOf)
+        val taskId = createTask(model, imageURL, maskURL, prompt, seed, fixOf, beklenenKredi)
         val resultURL = waitForResult(taskId, onStage)
         onStage(Stage.downloading)
         var attempt = 0
@@ -349,14 +446,10 @@ class KieImageEditClient(val endpoint: Endpoint) {
         prompt: String,
         seed: Int?,
         fixOf: String?,
+        beklenenKredi: Double?,
     ): String {
         val input = model.input(imageURL, maskURL, prompt.take(model.maxPromptLength), seed)
-        val payload = buildJsonObject {
-            put("model", model.apiModel)
-            put("input", input)
-            // Yalnız sunucu yolu: kie.ai bu alanı tanımaz.
-            if (isServerPath && fixOf != null) put("fixOf", fixOf)
-        }
+        val payload = gorevGovdesi(model, input, fixOf, beklenenKredi, sunucuYolu = isServerPath)
         val bytes = DfyJson.encodeToString(JsonObject.serializer(), payload).toByteArray()
         val req = authorized(createURL, "POST", bytes.toRequestBody(ApiClient.JSON_MEDIA))
         val json = send(req, bytes)
@@ -399,16 +492,15 @@ class KieImageEditClient(val endpoint: Endpoint) {
                     return first
                 }
                 "fail" -> {
-                    val msg = (data["failMsg"] as? JsonPrimitive)?.contentOrNull?.let { if (it.isEmpty()) null else readableFailure(it) }
-                    if (msg != null && (msg.contains("nsfw", ignoreCase = true) || msg.contains("sensitive", ignoreCase = true))) {
-                        throw KieError.contentRejected(msg)
-                    }
-                    // Sunucu yolu başarısız görevin kredisini (denemede hakkını) iade eder ve bunu bildirir.
-                    if ((json["refunded"] as? JsonPrimitive)?.booleanOrNull == true) {
-                        if (endpoint is Endpoint.guest) throw KieError.trialRefunded(msg)
-                        throw KieError.refunded(msg)
-                    }
-                    throw KieError.generationFailed(msg)
+                    val ham = (data["failMsg"] as? JsonPrimitive)?.contentOrNull ?: ""
+                    // İçerik reddi tespiti AYNEN; ham metin gösterilmez.
+                    if (icerikReddiMi(ham)) throw KieError.contentRejected(null)
+                    throw basarisizGorev(
+                        refunded = (json["refunded"] as? JsonPrimitive)?.booleanOrNull == true,
+                        sunucuYolu = isServerPath,
+                        misafir = endpoint is Endpoint.guest,
+                        mesaj = readableFailure(ham),
+                    )
                 }
                 "generating" -> if (!reportedGenerating) { reportedGenerating = true; onStage(Stage.generating) }
                 else -> Unit   // waiting / queuing
@@ -458,28 +550,8 @@ class KieImageEditClient(val endpoint: Endpoint) {
                     throw KieError.trialUnavailable("Ücretsiz deneme sunucuda henüz etkin değil. Lütfen daha sonra tekrar deneyin.")
             }
         }
-        // Sunucu yolunun kendi hataları (oturum, yetki, kredi, yapılandırma)
-        if (endpoint is Endpoint.proxy) {
-            val serverError = str("error")
-            when {
-                http == 401 -> throw KieError.sessionExpired
-                http == 403 -> throw KieError.forbidden
-                http == 402 && serverError == "CREDIT_LIMIT_REACHED" ->
-                    throw KieError.personalLimitReached(
-                        limit = number(json?.get("limitCredits")),
-                        used = number(json?.get("usedCredits")),
-                        required = number(json?.get("requiredCredits")),
-                    )
-                http == 402 -> throw KieError.clinicCreditsExhausted(
-                    required = number(json?.get("requiredCredits")),
-                    available = number(json?.get("availableCredits")),
-                )
-                http == 429 && serverError == "SMILE_SIM_HOURLY_CAP_REACHED" -> throw KieError.hourlyLimit
-                http == 502 -> throw KieError.providerUnavailable
-                http == 503 && serverError == "SMILE_SIM_PROVIDER_UNAVAILABLE" -> throw KieError.providerUnavailable
-                http == 503 -> throw KieError.notConfiguredOnServer
-            }
-        }
+        // Sunucu yolunun kendi hataları (oturum, yetki, kredi, bedel değişimi, yapılandırma)
+        if (endpoint is Endpoint.proxy) sunucuHatasi(http, json)?.let { throw it }
         val codePrim = json?.get("code") as? JsonPrimitive
         val code = (if (codePrim != null && !codePrim.isString) codePrim.intOrNull else null) ?: http
         val msg = str("msg") ?: str("message")
@@ -554,22 +626,6 @@ enum class SmileAIModel(val rawValue: String) {
             gptImage2 -> "Alternatif"
         }
 
-    /**
-     * Görev başına Dentifay AI kredisi (sunucu tarifesiyle aynı; sunucu yolunda
-     * asıl ücreti sunucu belirler). Geliştirme yolunda kie.ai kredisine eşittir
-     * (kie.ai fiyat listesi 23.09.2026; 1 kie kredisi ≈ 0,005 $).
-     */
-    val creditsPerImage: Double
-        get() = when (this) {
-            nanoBananaPro -> 18.0
-            nanoBanana2 -> 12.0
-            nanoBanana2Fast -> 8.0
-            nanoBanana -> 4.0
-            qwenMask -> 8.0
-            qwenMaskFast -> 4.0
-            gptImage2 -> 10.0
-        }
-
     val maxPromptLength: Int
         get() = when (this) {
             nanoBananaPro -> 10000
@@ -610,7 +666,7 @@ enum class SmileAIModel(val rawValue: String) {
         /**
          * 23.09.2026 telefon sonrası testi (ağız dikdörtgeni gönderimi, eksik diş +
          * betel lekesi vakaları): en doğal ışık/renk uyumu ve en düşük maliyet
-         * (4 kr, 30–80 sn, yerleşim 0,87–0,89). NB2 daha hızlı ama 2 kat pahalı.
+         * (30–80 sn, yerleşim 0,87–0,89). Kredi bedeli sunucudan (`/wallet` `tiers`) — mobilde sayı YOK.
          */
         val default: SmileAIModel = nanoBanana
 

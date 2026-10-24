@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/BadgeCheck.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="m 9 12 l 2 2 l 4 -4"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="m 14.394 3 l -.246 -.209 a 3.31 3.31 0 0 0 -4.296 0 l -.246 .21 a 4 4 0 0 1 -2.276 .943 l -.323 .025 A 3.31 3.31 0 0 0 3.97 7.007 l -.025 .323 A 4 4 0 0 1 3 9.606 l -.21 .246 a 3.31 3.31 0 0 0 0 4.296 l .21 .246 a 4 4 0 0 1 .943 2.276 l .025 .323 a 3.31 3.31 0 0 0 3.038 3.038 l .323 .025 A 4 4 0 0 1 9.606 21 l .246 .21 a 3.31 3.31 0 0 0 4.296 0 l .246 -.21 a 4 4 0 0 1 2.276 -.943 l .323 -.025 a 3.31 3.31 0 0 0 3.038 -3.038 l .025 -.323 A 4 4 0 0 1 21 14.394 l .21 -.246 a 3.31 3.31 0 0 0 0 -4.296 L 21 9.606 a 4 4 0 0 1 -.943 -2.276 l -.025 -.323 a 3.31 3.31 0 0 0 -3.038 -3.038 l -.323 -.025 A 4 4 0 0 1 14.394 3"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

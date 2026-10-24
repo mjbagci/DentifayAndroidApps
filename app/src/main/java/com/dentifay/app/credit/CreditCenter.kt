@@ -7,14 +7,21 @@ import com.dentifay.app.core.ApiClient
 import com.dentifay.app.core.AppConfig
 import com.dentifay.app.core.DfyJson
 import com.dentifay.app.core.SessionEvents
-import com.dentifay.app.core.str
+import com.dentifay.app.core.Yetki
+import com.dentifay.app.core.YetkiReddi
+import com.dentifay.app.core.hataCumlesi
+import com.dentifay.app.core.serverCode
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -33,63 +40,71 @@ import kotlin.math.min
 import kotlin.math.roundToLong
 
 /*
- * Kredi Yönetimi — "kim, nerede, ne kadar, hangi saatte kredi kullandı · kim ne kadar
- * kullanabilir · kredi yükle". Web'deki `/krediler` ekranıyla AYNI uçları okur:
+ * Kredi Yönetimi — web'in `/krediler` sayfasıyla AYNI dört bölüm ve AYNI uçlar
+ * (DentAIWeb `docs/MOBILE_AGENT_CONTRACT.md` §1, §10; Ekleme 16 · 35F ve Ekleme 18 · 37C–37D;
+ * sunucu `backend/routes/ai-credits.js` — `kredi-merkezi.js` okuyucusu):
  *
- *   GET  {API}/ai-credits/usage?from&to          özet (kişi · özellik · gün/saat · satın alma)
- *   GET  {API}/ai-credits/transactions?…&page     işlem defteri (sayfalı, süzgeçli)
- *   GET  {API}/ai-credits/people?ay=YYYY-MM       kişiler × bu ayki kullanım × limitler
- *   PUT  {API}/ai-credits/limits/:userId          kişinin aylık limit seti
- *   PUT  {API}/ai-credits/settings                düşük bakiye uyarı eşiği
+ *   GET  {API}/ai-credits/usage                          cüzdan + aylık döküm (`months[]`)
+ *   GET  {API}/ai-credits/analiz?from&to                 özet · seri · özellik · kişi · işlem · ısı haritası · kaç gün yeter
+ *   GET  {API}/ai-credits/transactions?cursor&limit[&from&to&userId&feature&tur]   imleçli, süzgeçli hareketler
+ *   GET  {API}/ai-credits/transactions/:id/kosullar      satın almada kabul edilen koşullar (`fin.credits`)
+ *   GET  {API}/ai-credits/people?ay&cursor&limit         kişiler × ay kullanımı × limitler
+ *   PUT  {API}/ai-credits/limits/:userId                 TAM limit seti (`If-Match` ZORUNLU)
+ *   GET|PUT {API}/ai-credits/settings                    düşük bakiye uyarı eşiği (`If-Match` ZORUNLU)
+ *   GET  {API}/ai-credits/tarife                         kredi ile çalışan işlemler (`KrediTarifesi`)
+ *   GET  {API}/edocument/kullanim · POST /kontor/yenile  e-Fatura kartı (salt okur)
  *
- * Görmek `fin.credits.view`, limit yazmak `fin.credits.limits`, satın almak `fin.credits`
- * ister (varsayılan yalnız klinik sahibi; Ayarlar'dan açılır). Hesap kuralları sunucuda
- * (`backend/lib/kredi-merkezi.js`): kullanım NET (iade düşülmüş), gün/saat kliniğin saatiyle.
+ * Görme kapısı `comm.usage` VEYA `fin.credits`; satın alma ve limit yazımı `fin.credits` (Sahip'in yönettiği
+ * yetenek — varsayılan yalnız Sahip). Mobil hiçbir toplamı, kalanı, limiti, süreyi ya da ücreti HESAPLAMAZ (M0-4).
  */
 
-// MARK: - Etiketler (sunucu metin taşımaz; kimlikleri burada Türkçeye çeviririz)
+// MARK: - Etiketler (sunucu kimlik taşır; metinler web `ns/krediler` ile aynı — Ek MO.21)
 
 object CreditLabels {
-    /** ⚠ Ekran metninde "AI" sözcüğü ve emoji YOK (ürün kuralı). */
+    /** Ek MO.21p — özellik. */
     val features: Map<String, String> = mapOf(
         "ai_agent" to "Dentifay Asistan",
-        "before_after" to "Gülüş simülasyonu",
         "ai_center" to "Analiz Merkezi",
         "xray" to "Röntgen analizi",
         "messaging" to "İletişim",
-        "purchase" to "Kredi yükleme",
+        "before_after" to "Gülüş simülasyonu",
+        "purchase" to "Kredi paketi",
         "platform_grant" to "Dentifay tanımı",
         "demo_admin" to "Dentifay düzeltmesi",
     )
 
-    /**
-     * Kredili (limit verilebilen) özellikler — sunucu `kredi-merkezi#KULLANIM_OZELLIKLERI`
-     * ile AYNI sıra. (Pazarlık ve çağrı merkezi 2026-10-10'da listeden çıktı.)
-     */
-    val limitFeatures = listOf("ai_agent", "before_after", "ai_center", "xray", "messaging")
-
+    /** Ek MO.21p — işlem. */
     val actions: Map<String, String> = mapOf(
-        "before_after:orta" to "Orta kalite", "before_after:orta_iyi" to "Orta İyi kalite",
-        "before_after:iyi" to "İyi kalite", "before_after:cok_iyi" to "Çok İyi kalite",
-        "before_after:duzeltme" to "Otomatik yerleşim düzeltmesi", "before_after:generate" to "Görsel üretimi",
-        "ai_agent:chat" to "Sohbet turu", "ai_agent:voice" to "Sesli tur eki",
-        "ai_center:audience" to "Hedef kitle", "ai_center:insight" to "Modül yorumu",
-        "ai_center:briefing" to "Klinik brifingi", "ai_center:report_export" to "Excel rapor",
-        "xray:analyze" to "Görüntü analizi",
+        "ai_agent:chat" to "Dentifay Asistan sorusu",
+        "ai_center:audience" to "Hedef kitle sorgusu",
+        "ai_center:report_export" to "Excel rapor önizlemesi",
+        "ai_center:insight" to "Modül yorumu",
+        "ai_center:briefing" to "Klinik brifingi",
+        "xray:analyze" to "Röntgen analizi",
         "messaging:suggest_message" to "Mesaj taslağı",
-        "purchase:credit_pack" to "Kredi paketi", "purchase:auto_reload" to "Otomatik yükleme",
-        "platform_grant:opening" to "Açılış kredisi", "platform_grant:bulk" to "Toplu tanım",
-        "platform_grant:single" to "Tanım", "platform_grant:placeholder_removed" to "Yer tutucu kaldırıldı",
+        "before_after:orta" to "Gülüş simülasyonu · Orta",
+        "before_after:orta_iyi" to "Gülüş simülasyonu · Orta İyi",
+        "before_after:iyi" to "Gülüş simülasyonu · İyi",
+        "before_after:cok_iyi" to "Gülüş simülasyonu · Çok İyi",
+        "before_after:duzeltme" to "Gülüş simülasyonu · otomatik yerleşim düzeltmesi",
+        "purchase:credit_pack" to "Kredi paketi",
+        // M-E4.1: klinik açılışta kredi almaz — bu satır Dentifay'ın tanımladığı ücretsiz kredidir.
+        "platform_grant:opening" to "Dentifay'ın tanımladığı kredi",
+        "platform_grant:placeholder_removed" to "Düzeltme",
     )
+
+    /** Ek MO.21o — hareket türü (sunucu `HAREKET_TURU`); tanınmayan "Diğer". */
     val kinds: Map<String, String> = mapOf(
-        "usage" to "Kullanım", "refund" to "İade", "free_fix" to "Ücretsiz düzeltme",
-        "purchase" to "Satın alma", "grant" to "Dentifay tanımı", "adjustment" to "Düzeltme",
+        "kullanim" to "Kullanım", "iade" to "İade", "satin_alma" to "Satın alma",
+        "tanim" to "Dentifay tanımı", "duzeltme" to "Düzeltme", "diger" to "Diğer",
     )
-    val kindOrder = listOf("usage", "refund", "free_fix", "purchase", "grant", "adjustment")
-    val sources: Map<String, String> = mapOf(
-        "free" to "Ücretsiz kredi", "balance" to "Satın alınmış kredi",
-        "mixed" to "Ücretsiz + satın alınmış", "overage" to "Ay sonu faturası",
-    )
+
+    /** Süzgeç seçenekleri — sunucunun `tur` kümesiyle aynı (`diger` dahil). */
+    val kindOrder = listOf("kullanim", "iade", "satin_alma", "tanim", "duzeltme", "diger")
+
+    /** Ek MO.21o — kaynak (yalnız kullanımda). */
+    val sources: Map<String, String> = mapOf("ucretsiz" to "Ücretsiz kredi", "satin_alinmis" to "Satın alınmış kredi")
+
     val departments: Map<String, String> = mapOf(
         "OWNER" to "Sahip", "ADMIN" to "Yönetici", "MANAGER" to "Klinik Müdürü", "BANKO" to "Banko",
         "CAGRI_MERKEZI" to "Çağrı Merkezi Sorumlusu", "HASTA_KOORDINATORU" to "Hasta Koordinatörü",
@@ -100,22 +115,20 @@ object CreditLabels {
     )
     val weekdays = listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz")
 
-    /** Fiyat listesi birimi (`priceCatalog[].unit`) → "… başına". */
-    val units: Map<String, String> = mapOf(
-        "turn" to "tur başına", "query" to "sorgu başına", "run" to "çalıştırma başına",
-        "image" to "görüntü başına", "draft" to "taslak başına", "simulation" to "simülasyon başına",
-        "operation" to "işlem başına",
-    )
+    /** Ekleme 20 · 39B — Dentifay'ın tanımladığı (ücretsiz) kredi hareketi. */
+    const val tanimMetni = "Dentifay'ın tanımladığı kredi"
 
-    fun unit(key: String?): String = units[key ?: ""] ?: "işlem başına"
     fun feature(key: String?): String = features[key ?: ""] ?: "Diğer"
-    fun action(feature: String?, action: String?): String? = actions["${feature ?: ""}:${action ?: ""}"]
+    fun kind(key: String?): String = kinds[key ?: ""] ?: "Diğer"
+
+    /** İşlem adı: `feature:action` → Ek MO.21p; yoksa özellik adı; tanınmayan "Diğer". */
     fun operation(feature: String?, action: String?): String =
-        listOfNotNull(feature(feature), action(feature, action)).joinToString(" · ")
+        actions["${feature ?: ""}:${action ?: ""}"] ?: this.feature(feature)
 }
 
 // MARK: - Modeller
 
+/** Kişi (sunucu `kisiGorunumu`): ad yoksa Ek MO.21s "Bilinmeyen kişi"; ayrılmış/pasif ek. */
 @Serializable
 data class CreditPerson(
     val id: String,
@@ -126,21 +139,49 @@ data class CreditPerson(
 ) {
     val displayName: String
         get() {
-            val ad = name ?: "Bilinmeyen kişi"
+            val ad = name?.takeIf { it.isNotEmpty() } ?: "Bilinmeyen kişi"
             return if (former == true) "$ad (ayrılmış)" else ad
         }
     val departmentLabel: String? get() = department?.let { CreditLabels.departments[it] }
 }
 
+/** `GET /ai-credits/usage` → `{wallet, months[]}`; `wallet` gülüş cüzdanıyla AYNI biçim. */
 @Serializable
 data class CreditUsage(
-    val tz: String,
-    val from: String,
-    val to: String,
+    val wallet: SmileWallet? = null,
+    val months: List<Month>,
+    val isDemo: Boolean? = null,
+) {
+    /** Aylık döküm satırı. `purchasedTL` YALNIZ tutar görme yetkisinde; yoksa satır ₺ çizmez. */
+    @Serializable
+    data class Month(
+        val period: String,
+        val usedCredits: Double,
+        val purchasedTL: Double? = null,
+        val overageTL: Double? = null,
+        val billed: Boolean,
+    ) {
+        val id: String get() = period
+
+        /** Ek MO.21f/g — durum yalnız ödenecek bir tutar varken (`purchasedTL > 0 || overageTL > 0`); yoksa null. */
+        val durumMetni: String?
+            get() {
+                if ((purchasedTL ?: 0.0) <= 0 && (overageTL ?: 0.0) <= 0) return null
+                return if (billed) "Faturalandı" else "Ay sonu Dentifay faturasına yansır"
+            }
+    }
+}
+
+/** `GET /ai-credits/analiz` (sunucu `kredi-merkezi#ozetle` + Ekleme 18 · 37D.1–2 alanları). */
+@Serializable
+data class CreditAnalysis(
+    val tz: String? = null,
+    val from: String? = null,
+    val to: String? = null,
     val truncated: Boolean? = null,
-    val wallet: Wallet,
+    /** "Kaç gün yeter" — sunucu (son 30 günün net kullanımıyla); kullanım yoksa `null` → "—". */
     val runwayDays: Int? = null,
-    val last30DaysCredits: Double,
+    val last30DaysCredits: Double? = null,
     val unit: String,
     val summary: Summary,
     val series: List<Bucket>,
@@ -148,40 +189,16 @@ data class CreditUsage(
     val actions: List<ActionRow>,
     val heatmap: List<List<Cell>>,
     val users: List<UserRow>,
-    val packs: List<SmileCreditPack>,
-    val priceCatalog: List<PriceRow>,
-    val canPurchase: Boolean,
-    val purchaseBlockedReason: String? = null,
-    val canManageLimits: Boolean,
 ) {
-    @Serializable
-    data class Wallet(
-        val availableCredits: Double,
-        val freeRemainingCredits: Double,
-        val freeGrantCredits: Double,
-        val balanceCredits: Double,
-        val lowBalanceWarnCredits: Double,
-        val isLow: Boolean,
-        val isDemo: Boolean? = null,
-        val thisMonth: SmileWallet.Month? = null,
-    )
-
     @Serializable
     data class Summary(
         val usedCredits: Double,
-        val chargedCredits: Double,
         val refundedCredits: Double,
-        val freeUsedCredits: Double,
         val operations: Int,
-        val refunds: Int,
-        val freeFixes: Int,
-        val activeUsers: Int,
         val purchasedCredits: Double,
         val purchases: Int,
-        val paidTL: Double,
-        val grantedCredits: Double,
-        val adjustedCredits: Double,
-        val avgDailyCredits: Double,
+        /** Aralıktaki satın almaların ödenen tutarı — bilinemiyorsa ya da yetki yoksa alan YOK (TL çizilmez). */
+        val paidTL: Double? = null,
     )
 
     @Serializable
@@ -198,7 +215,9 @@ data class CreditUsage(
         val feature: String,
         val credits: Double,
         val operations: Int,
-        val refunds: Int,
+        val refunds: Int? = null,
+        /** Aralıktaki pay (%) — sunucu hesaplar. */
+        val share: Int? = null,
     ) {
         val id: String get() = feature
     }
@@ -218,7 +237,6 @@ data class CreditUsage(
         val userId: String? = null,
         val credits: Double,
         val operations: Int,
-        val refunds: Int,
         val lastAt: String? = null,
         val user: CreditPerson? = null,
     ) {
@@ -230,78 +248,113 @@ data class CreditUsage(
         val credits: Double,
         val ops: Int,
     )
-
-    /**
-     * `{feature, action, unit, extra, credits, minCredits, maxCredits}` — eski sunucuda
-     * `extra`/`minCredits`/`maxCredits` yok → `credits`e düşülür.
-     */
-    @Serializable
-    data class PriceRow(
-        val feature: String,
-        val action: String,
-        val credits: Double,
-        val unit: String,
-        /** Başka bir işlemin üstüne eklenen ücret (sesli tur +1). */
-        val extra: Boolean? = null,
-        val minCredits: Double? = null,
-        val maxCredits: Double? = null,
-    ) {
-        val id: String get() = "$feature:$action"
-
-        /** "Ücretsiz" · "2 kredi" · "1–2 kredi" (aralıklı) · "+1 kredi" (ek ücret). */
-        val priceText: String
-            get() {
-                val lo = minCredits ?: credits
-                val hi = max(maxCredits ?: credits, lo)
-                if (hi <= 0) return "Ücretsiz"
-                val amount = if (lo == hi) creditText(lo) else "${creditText(lo)}–${creditText(hi)}"
-                return (if (extra == true) "+" else "") + amount + " kredi"
-            }
-        val isFree: Boolean get() = max(maxCredits ?: credits, minCredits ?: credits) <= 0
-    }
 }
 
+/** `GET /ai-credits/transactions` → `{items, nextCursor, limit}`. */
 @Serializable
 data class CreditTransactionsPage(
-    val pagination: Pagination,
-    val rows: List<Row>,
+    val items: List<Row>,
+    val nextCursor: String? = null,
 ) {
     @Serializable
-    data class Pagination(
-        val page: Int,
-        val limit: Int,
-        val total: Int,
-        val pages: Int,
+    data class Kisi(
+        val id: String? = null,
+        val ad: String? = null,
+        val ayrildi: Boolean? = null,
     )
 
     @Serializable
     data class Row(
         val id: String,
         val at: String,
-        val kind: String,
+        val tur: String,
         val feature: String? = null,
         val action: String? = null,
         val credits: Double,
-        val source: String? = null,
-        val parts: Int,
-        val priceTL: Double? = null,
-        val byPlatform: Boolean,
-        val user: CreditPerson? = null,
+        val kaynak: String? = null,
+        val kisi: Kisi? = null,
+        /** Satın alma satırı: kabul edilen koşul kaydı var mı (Ekleme 18 · 37C). */
+        val kosulVar: Boolean? = null,
+        /** Satın alma satırı: ödenen tutar — YALNIZ tutar görme yetkisinde ve koşul kaydı varsa (yoksa çizilmez). */
+        val tutarTL: Double? = null,
     ) {
-        val actorName: String
+        /** Kişisiz kayıt "Dentifay" (Ek O.30-10); ayrılmış üye etiketiyle. */
+        val kisiMetni: String
             get() {
-                if (user != null) return user.displayName
-                return if (byPlatform || kind == "grant") "Dentifay" else "Sistem"
+                val ad = kisi?.ad?.takeIf { it.isNotEmpty() } ?: return "Dentifay"
+                return if (kisi?.ayrildi == true) "$ad (ayrılmış)" else ad
+            }
+        val kaynakMetni: String? get() = kaynak?.let { CreditLabels.sources[it] }
+        val turMetni: String get() = CreditLabels.kind(tur)
+
+        /** Sözleşme §10 (Ekleme 20 · 39B): `tur: "tanim"` satırı "Dentifay'ın tanımladığı kredi" diye yazılır. */
+        val islemMetni: String
+            get() = if (tur == "tanim") CreditLabels.tanimMetni else CreditLabels.operation(feature, action)
+
+        /** "+N" / "−N" — kredi, TL biçimi DEĞİL. */
+        val isaretliKredi: String
+            get() {
+                if (credits == 0.0) return creditText(0.0)
+                return (if (credits > 0) "+" else "−") + creditText(abs(credits))
             }
     }
 }
 
+/** Hareket süzgeçleri (Ekleme 18 · 37D.1) — imleçle BİRLİKTE gönderilir; boşsa hiçbiri gitmez. `page` YOK. */
+data class CreditFilter(
+    val from: String? = null,
+    val to: String? = null,
+    val userId: String? = null,
+    val feature: String? = null,
+    val tur: String? = null,
+) {
+    val bosMu: Boolean get() = from == null && to == null && userId == null && feature == null && tur == null
+
+    fun queryItems(cursor: String?, limit: Int): List<Pair<String, String>> {
+        val q = mutableListOf("limit" to limit.toString())
+        if (cursor != null) q += "cursor" to cursor
+        if (from != null && to != null) {
+            q += "from" to from
+            q += "to" to to
+        }
+        userId?.let { q += "userId" to it }
+        feature?.let { q += "feature" to it }
+        tur?.let { q += "tur" to it }
+        return q
+    }
+}
+
+/** `GET /ai-credits/transactions/:id/kosullar` — kabul edilen metin (Ek MO2.5). */
+@Serializable
+data class AcceptedTerms(
+    val surum: String,
+    val ozet: String? = null,
+    val kabulEden: Kabul? = null,
+    val at: String? = null,
+    /** Sözleşme §10: `metin: { baslik, bolumler }` — kabul anındaki metnin kendisi (paket/tutar alanları YOK). */
+    val metin: Metin? = null,
+) {
+    @Serializable
+    data class Kabul(val ad: String? = null)
+
+    @Serializable
+    data class Metin(
+        val baslik: String? = null,
+        val bolumler: List<SmilePurchaseTerms.Bolum>,
+    )
+}
+
+/** `GET /ai-credits/people`. */
 @Serializable
 data class CreditPeople(
     val month: String,
+    /** Limit verilebilen özellikler — SUNUCUDAN (istemcide liste tutulmaz). */
+    val features: List<String>,
     val people: List<Person>,
+    val nextCursor: String? = null,
     val unattributed: Unattributed? = null,
     val canManageLimits: Boolean,
+    val maxLimitCredits: Double? = null,
 ) {
     @Serializable
     data class Usage(
@@ -323,9 +376,18 @@ data class CreditPeople(
         val operations: Int,
         val byFeature: Map<String, Usage>,
         val limits: Limits,
+        /** `If-Match` için — limit yazımında AYNEN geri gönderilir. */
+        val limitVersion: String,
         val remainingCredits: Double? = null,
     ) {
         val id: String get() = user.id
+
+        /** Limit çubuğunun oranı (sunucunun iki sayısı; limit yoksa çubuk YOK). */
+        val limitOrani: Double?
+            get() {
+                val total = limits.total ?: return null
+                return if (total <= 0) 1.0 else min(1.0, max(0.0, usedCredits) / total)
+            }
     }
 
     @Serializable
@@ -335,18 +397,80 @@ data class CreditPeople(
     )
 }
 
+/** `GET|PUT /ai-credits/settings`. */
+@Serializable
+data class CreditSettings(
+    val lowBalanceWarnCredits: Double,
+    val version: String,
+    val canEdit: Boolean? = null,
+)
+
+/** `GET /edocument/kullanim` — e-Fatura kartı (Ek MO.21r; salt okur). */
+@Serializable
+data class EDocumentUsage(
+    val hesap: Hesap? = null,
+    val buAy: BuAy? = null,
+    val kontor: Kontor? = null,
+    val uyari: String? = null,
+) {
+    @Serializable
+    data class Hesap(val id: String, val ad: String? = null, val ortam: String? = null)
+
+    @Serializable
+    data class BuAy(val toplam: Int, val turler: Map<String, Int>)
+
+    @Serializable
+    data class Kontor(val kalan: Double? = null, val okumaZamani: String? = null)
+}
+
+// MARK: - Görünürlük (yalnız GÖRÜNÜM — asıl kapı sunucuda)
+
+object KrediErisimi {
+    /** Kredi Yönetimi: sunucunun görme kapısıyla AYNI küme (`comm.usage` | `fin.credits`). */
+    fun yonetimGorur(caps: Set<String>): Boolean = "comm.usage" in caps || "fin.credits" in caps
+
+    /** Kredi Yükle bölümü (web `KrediYonetimiPage` ile aynı): `fin.credits`. */
+    fun yukleGorur(caps: Set<String>): Boolean = "fin.credits" in caps
+
+    /**
+     * Android: "Kredi Yükle" bölümü bu derlemede çizilir mi — `fin.credits` VE uygulama içi satın alma açık
+     * (`AppConfig.inAppPurchase`; mağaza derlemesinde kapalı, krediler web panelinden alınır — Play Ödemeler kuralı).
+     */
+    fun yukleBolumu(caps: Set<String>): Boolean = yukleGorur(caps) && AppConfig.inAppPurchase
+
+    enum class AyarlarSatiri { yonetim, krediler }
+
+    /** Ayarlar › "Krediler" grubu: Kredi Yönetimi görünürse TEK satır; değilse `ai.smilesim` ile salt okur "Krediler"; yoksa grup yok. */
+    fun ayarlarSatiri(caps: Set<String>): AyarlarSatiri? = when {
+        yonetimGorur(caps) -> AyarlarSatiri.yonetim
+        "ai.smilesim" in caps -> AyarlarSatiri.krediler
+        else -> null
+    }
+}
+
 // MARK: - İstemci
 
 class CreditCenterClient(
     /** `{API}` kökü (ör. https://dentifay.com/api). */
     val base: String,
 ) {
-    sealed class ClientError(message: String) : Exception(message) {
+    /**
+     * `message` = Swift `errorDescription`. `server` sunucunun cümlesini ve kodunu taşır (M0-7); kodsuz 403
+     * (`status == 403 && code == null`) yetki reddidir — parça çizilmez (M-E7.5, `Yetki.reddiMi`).
+     */
+    sealed class ClientError(message: String) : Exception(message), YetkiReddi {
         class notLoggedIn : ClientError("Oturumunuz sona ermiş. Tekrar giriş yapın.")
-        class forbidden(val m: String?) :
-            ClientError(m ?: "Bu ekran için yetkiniz yok. Klinik sahibinden “Kredi Yönetimi'ni görüntüleme” yetkisini isteyin.")
-        class server(val code: Int, val m: String?) : ClientError(m ?: "Sunucu hatası ($code). Tekrar deneyin.")
-        class badResponse : ClientError("Sunucudan beklenmeyen yanıt alındı.")
+
+        /** Sunucunun cümlesi + kodu (M0-7). */
+        class server(val httpDurumu: Int, val m: String?, val sunucuKodu: String?) :
+            ClientError(m ?: "Kredi bilgileri yüklenemedi.")
+
+        class badResponse : ClientError("Kredi bilgileri yüklenemedi.")
+
+        val code: String? get() = (this as? server)?.sunucuKodu
+        val status: Int? get() = (this as? server)?.httpDurumu
+
+        override val yetkiReddiMi: Boolean get() = status == 403 && code == null
     }
 
     companion object {
@@ -358,66 +482,107 @@ class CreditCenterClient(
                 .build()
         }
         private val JSON = "application/json".toMediaType()
+
+        /** Tek yol parçasının yüzde kodlaması ("/" dahil kodlanır — kimlik yolu bozamaz). */
+        internal fun yolParcasi(s: String): String =
+            HttpUrl.Builder().scheme("https").host("x").addPathSegment(s).build().encodedPathSegments.first()
     }
 
-    suspend fun usage(from: String, to: String): CreditUsage =
-        get(CreditUsage.serializer(), "/ai-credits/usage", listOf("from" to from, "to" to to))
+    // MARK: Saf istek kurucular (test edilebilir)
 
-    suspend fun transactions(
-        from: String, to: String, userId: String?, feature: String?, kind: String?, page: Int, limit: Int = 25,
-    ): CreditTransactionsPage {
-        val q = mutableListOf("from" to from, "to" to to, "page" to page.toString(), "limit" to limit.toString())
-        if (userId != null) q += "userId" to userId
-        if (feature != null) q += "feature" to feature
-        if (kind != null) q += "kind" to kind
-        return get(CreditTransactionsPage.serializer(), "/ai-credits/transactions", q)
+    fun istek(
+        path: String,
+        method: String = "GET",
+        query: List<Pair<String, String>> = emptyList(),
+        body: JsonObject? = null,
+        ifMatch: String? = null,
+    ): Request {
+        val url = (base + path).toHttpUrlOrNull()?.newBuilder() ?: throw ClientError.badResponse()
+        query.forEach { (k, v) -> url.addQueryParameter(k, v) }
+        val govde = when {
+            body != null -> DfyJson.encodeToString(JsonObject.serializer(), body).toRequestBody(JSON)
+            method == "GET" || method == "HEAD" -> null
+            else -> ByteArray(0).toRequestBody(null)
+        }
+        val b = Request.Builder().url(url.build()).method(method, govde).header("Cache-Control", "no-cache")
+        if (body != null) b.header("Content-Type", "application/json")
+        if (ifMatch != null) b.header("If-Match", "\"$ifMatch\"")
+        return b.build()
     }
 
-    suspend fun people(month: String?): CreditPeople =
-        get(CreditPeople.serializer(), "/ai-credits/people", month?.let { listOf("ay" to it) } ?: emptyList())
+    fun hareketIstegi(s: CreditFilter, cursor: String?, limit: Int = 30): Request =
+        istek("/ai-credits/transactions", query = s.queryItems(cursor, limit))
 
-    /** Kişinin limit setini TAM yazar (PUT anlamı): `total` null = sınırsız; olmayan özellik = sınırsız. */
-    suspend fun saveLimits(userId: String, total: Double?, features: Map<String, Double>) {
-        val id = android.net.Uri.encode(userId, "/")
+    /** Limit yazımı: gövde `{total, features}` (TAM liste; null = sınırsız), başlık `If-Match: "<limitVersion>"`. */
+    fun limitIstegi(userId: String, total: Double?, features: Map<String, Double?>, version: String): Request {
         val body = buildJsonObject {
             put("total", total)
-            putJsonObject("features") { features.forEach { (k, v) -> put(k, v) } }
+            put("features", buildJsonObject { features.forEach { (k, v) -> put(k, v) } })
         }
-        send("/ai-credits/limits/$id", "PUT", body)
+        return istek("/ai-credits/limits/${yolParcasi(userId)}", method = "PUT", body = body, ifMatch = version)
     }
 
-    suspend fun saveLowBalanceThreshold(credits: Double) {
-        send("/ai-credits/settings", "PUT", buildJsonObject { put("lowBalanceWarnCredits", credits) })
+    fun ayarIstegi(esik: Double, version: String): Request =
+        istek("/ai-credits/settings", method = "PUT", body = buildJsonObject { put("lowBalanceWarnCredits", esik) }, ifMatch = version)
+
+    // MARK: Uçlar
+
+    suspend fun usage(): CreditUsage = get(CreditUsage.serializer(), istek("/ai-credits/usage"))
+
+    suspend fun analiz(from: String, to: String): CreditAnalysis =
+        get(CreditAnalysis.serializer(), istek("/ai-credits/analiz", query = listOf("from" to from, "to" to to)))
+
+    suspend fun transactions(s: CreditFilter, cursor: String?, limit: Int = 30): CreditTransactionsPage =
+        get(CreditTransactionsPage.serializer(), hareketIstegi(s, cursor, limit))
+
+    suspend fun kosullar(transactionId: String): AcceptedTerms =
+        get(AcceptedTerms.serializer(), istek("/ai-credits/transactions/${yolParcasi(transactionId)}/kosullar"))
+
+    suspend fun people(month: String?, cursor: String?): CreditPeople {
+        val q = mutableListOf("limit" to "30")
+        if (month != null) q += "ay" to month
+        if (cursor != null) q += "cursor" to cursor
+        return get(CreditPeople.serializer(), istek("/ai-credits/people", query = q))
     }
 
-    private suspend fun <T> get(deserializer: kotlinx.serialization.KSerializer<T>, path: String, query: List<Pair<String, String>>): T {
-        val data = send(path, "GET", null, query)
-        return try {
-            DfyJson.decodeFromString(deserializer, data.toString(Charsets.UTF_8))
-        } catch (e: Exception) {
-            throw ClientError.badResponse()
+    @Serializable
+    data class LimitSonucu(val limitVersion: String, val limits: CreditPeople.Limits)
+
+    suspend fun saveLimits(userId: String, total: Double?, features: Map<String, Double?>, version: String): LimitSonucu =
+        get(LimitSonucu.serializer(), limitIstegi(userId, total, features, version))
+
+    suspend fun settings(): CreditSettings = get(CreditSettings.serializer(), istek("/ai-credits/settings"))
+
+    suspend fun saveSettings(esik: Double, version: String): CreditSettings =
+        get(CreditSettings.serializer(), ayarIstegi(esik, version))
+
+    suspend fun tarife(): KrediTarifesi = get(KrediTarifesi.serializer(), istek("/ai-credits/tarife"))
+
+    suspend fun eBelge(): EDocumentUsage = get(EDocumentUsage.serializer(), istek("/edocument/kullanim"))
+
+    suspend fun eBelgeYenile(): EDocumentUsage =
+        get(EDocumentUsage.serializer(), istek("/edocument/kontor/yenile", method = "POST"))
+
+    private suspend fun <T> get(deserializer: KSerializer<T>, req: Request): T {
+        val data = send(req)
+        return withContext(Dispatchers.Default) {
+            try {
+                DfyJson.decodeFromString(deserializer, data.toString(Charsets.UTF_8))
+            } catch (e: Exception) {
+                throw ClientError.badResponse()
+            }
         }
     }
 
-    private suspend fun send(path: String, method: String, body: JsonElement?, query: List<Pair<String, String>> = emptyList()): ByteArray {
-        val builder = (base + path).toHttpUrlOrNull()?.newBuilder() ?: throw ClientError.badResponse()
-        query.forEach { (k, v) -> builder.addQueryParameter(k, v) }
-        val url = builder.build()
-        val reqBody = body?.let { DfyJson.encodeToString(JsonElement.serializer(), it).toRequestBody(JSON) }
-        val rb = Request.Builder().url(url).method(method, reqBody).header("Cache-Control", "no-cache")
-        if (body != null) rb.header("Content-Type", "application/json")
-        val req = rb.build()
+    private suspend fun send(req: Request): ByteArray {
         val raw = ApiClient.execute(req, session)
-        val json = runCatching { DfyJson.parseToJsonElement(raw.body.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull()
-        val message = json?.str("error")?.takeIf { it.contains(" ") } ?: json?.str("message")
         return when (raw.status) {
             in 200..299 -> raw.body
             401 -> {
                 SessionEvents.report401(raw.body, req.url.encodedPath)
                 throw ClientError.notLoggedIn()
             }
-            403 -> throw ClientError.forbidden(message)
-            else -> throw ClientError.server(raw.status, message)
+            else -> throw ClientError.server(raw.status, hataCumlesi(raw.status, raw.body), serverCode(raw.body))
         }
     }
 }
@@ -427,34 +592,37 @@ class CreditCenterClient(
 object CreditDates {
     private val tr = Locale.forLanguageTag("tr-TR")
 
-    /** Kliniğin saat dilimiyle `YYYY-MM-DD`. */
+    // Biçimleyiciler bir kez kurulur (değişmez ve iş parçacığı güvenli).
+    private val kisaBicim = DateTimeFormatter.ofPattern("d MMM HH:mm", tr)
+    private val gunBicim = DateTimeFormatter.ofPattern("d MMM", tr)
+    private val ayBicim = DateTimeFormatter.ofPattern("MMM yy", tr)
+    private val aylar = listOf("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
+
+    /** Saat dilimiyle `YYYY-MM-DD`. */
     fun ymd(date: Instant, tz: ZoneId): String {
         val d = date.atZone(tz).toLocalDate()
         return String.format(Locale.US, "%04d-%02d-%02d", d.year, d.monthValue, d.dayOfMonth)
     }
 
-    /** Sunucunun ISO anı (`toISOString()` → milisaniyeli). */
     fun parse(s: String): Instant? =
         runCatching { Instant.parse(s) }.getOrNull() ?: runCatching { OffsetDateTime.parse(s).toInstant() }.getOrNull()
 
-    /** "10 Eki 14:30" — kliniğin saatiyle. */
-    fun short(s: String, tz: ZoneId): String {
+    /** "10 Eki 14:30" — cihazın saat dilimiyle (Türkiye'de klinikle aynı; bilinen sınır). */
+    fun short(s: String, tz: ZoneId = ZoneId.systemDefault()): String {
         val d = parse(s) ?: return s
-        return DateTimeFormatter.ofPattern("d MMM HH:mm", tr).withZone(tz).format(d)
+        return kisaBicim.withZone(tz).format(d)
     }
 
-    /** "Ekim 2026" */
+    /** "2026-10" → "Ekim 2026" */
     fun monthLabel(ym: String): String {
         val parts = ym.split("-").mapNotNull { it.toIntOrNull() }
         if (parts.size != 2) return ym
-        val aylar = listOf("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
         return "${aylar[max(0, min(11, parts[1] - 1))]} ${parts[0]}"
     }
 
     /**
-     * Grafik takvimi: seri kovaları kliniğin GÜNÜDÜR (sunucuda hesaplandı); takvim günü
-     * olarak çizilir — cihazın saat dilimi günü kaydıramaz.
-     * Seri kovası anahtarı ("YYYY-MM-DD" ya da "YYYY-MM") → gün.
+     * Seri kovası anahtarı ("YYYY-MM-DD" ya da "YYYY-MM") → takvim günü. Kova kliniğin günüdür (sunucuda
+     * hesaplandı); cihazın saat dilimi günü kaydıramaz.
      */
     fun bucketDate(key: String): LocalDate? {
         val p = key.split("-").mapNotNull { it.toIntOrNull() }
@@ -463,16 +631,15 @@ object CreditDates {
     }
 
     /** Grafik ekseni: gün kovası "10 Eki", ay kovası "Eki 26". */
-    fun axisLabel(date: LocalDate, monthly: Boolean): String =
-        DateTimeFormatter.ofPattern(if (monthly) "MMM yy" else "d MMM", tr).format(date)
+    fun axisLabel(date: LocalDate, monthly: Boolean): String = (if (monthly) ayBicim else gunBicim).format(date)
 
-    /** "2026-10-10" → "10 Eki" (aralık şeridi). */
+    /** "2026-10-10" → "10 Eki" */
     fun dayLabel(ymd: String): String {
         val d = bucketDate(ymd) ?: return ymd
         return axisLabel(d, monthly = false)
     }
 
-    /** Son N ay (yeniden eskiye) — kliniğin bugününden. */
+    /** Son N ay (yeniden eskiye) — platform ayı (Europe/Istanbul). */
     fun lastMonths(count: Int, tz: ZoneId, now: Instant = Instant.now()): List<String> {
         val today = ymd(now, tz)
         val p = today.split("-").mapNotNull { it.toIntOrNull() }
@@ -483,25 +650,29 @@ object CreditDates {
         repeat(count) {
             out += String.format(Locale.US, "%04d-%02d", y, m)
             m -= 1
-            if (m == 0) { m = 12; y -= 1 }
+            if (m == 0) {
+                m = 12
+                y -= 1
+            }
         }
         return out
     }
+
+    /** Platformun dilimi (sunucu varsayılanı). */
+    val istanbul: ZoneId = runCatching { ZoneId.of("Europe/Istanbul") }.getOrNull() ?: ZoneId.systemDefault()
 }
 
-// MARK: - Durum
-
-/** Hazır aralıklar — web'deki `DateRangePicker` ön ayarlarıyla aynı anlam (bugün DAHİL). */
+/** Hazır aralıklar (bugün DAHİL; varsayılan bu ay — M-E1.7.4 madde 1). */
 enum class CreditRange {
-    last7, last30, last90, thisMonth;
+    thisMonth, last7, last30, last90;
 
     val id: String get() = name
     val label: String
         get() = when (this) {
+            thisMonth -> "Bu ay"
             last7 -> "Son 7 gün"
             last30 -> "Son 30 gün"
             last90 -> "Son 90 gün"
-            thisMonth -> "Bu ay"
         }
 
     data class Bounds(val from: String, val to: String)
@@ -517,159 +688,285 @@ enum class CreditRange {
     }
 }
 
+// MARK: - Durum
+
+/** Tek yükleyici — bölüm başına ayrı istek; bir bölümün hatası ötekileri DÜŞÜRMEZ. */
 class CreditCenterStore {
+    // Genel Bakış
     var usage by mutableStateOf<CreditUsage?>(null)
         private set
     var usageError by mutableStateOf<String?>(null)
         private set
-    var isLoadingUsage by mutableStateOf(false)
+    var analysis by mutableStateOf<CreditAnalysis?>(null)
+        private set
+    var analysisError by mutableStateOf<String?>(null)
+        private set
+    var settings by mutableStateOf<CreditSettings?>(null)
+        private set
+    var settingsError by mutableStateOf<String?>(null)
+        private set
+    var eDocument by mutableStateOf<EDocumentUsage?>(null)
+        private set
+    var eDocumentError by mutableStateOf<String?>(null)
+        private set
+    var isLoadingOverview by mutableStateOf(false)
         private set
 
+    // Hareketler
     var rows by mutableStateOf<List<CreditTransactionsPage.Row>>(emptyList())
         private set
-    var pagination by mutableStateOf<CreditTransactionsPage.Pagination?>(null)
+    var nextCursor by mutableStateOf<String?>(null)
+        private set
+    var rowsLoaded by mutableStateOf(false)
         private set
     var rowsError by mutableStateOf<String?>(null)
         private set
     var isLoadingRows by mutableStateOf(false)
         private set
 
+    // Kişiler ve Limitler
     var people by mutableStateOf<CreditPeople?>(null)
         private set
     var peopleError by mutableStateOf<String?>(null)
         private set
 
-    /** Son bir yılın kredi yüklemeleri (Yükle bölümü) — defterin AYNI ucundan, tür süzgeciyle. */
+    // Kredi Yükle — son satın almalar (Ekleme 18 · 37D; `tur=satin_alma`, son bir yıl)
     var purchases by mutableStateOf<List<CreditTransactionsPage.Row>>(emptyList())
         private set
     var purchasesError by mutableStateOf<String?>(null)
         private set
 
-    var range by mutableStateOf(CreditRange.last30)
-    var filterUser by mutableStateOf<String?>(null)
-    var filterFeature by mutableStateOf<String?>(null)
-    var filterKind by mutableStateOf<String?>(null)
+    var range by mutableStateOf(CreditRange.thisMonth)
+    var filter by mutableStateOf(CreditFilter())
     var month by mutableStateOf<String?>(null)
 
     private val client: CreditCenterClient get() = CreditCenterClient(AppConfig.apiBaseURL)
 
-    /** Kliniğin dilimi sunucudan gelir (`usage.tz`); gelene dek İstanbul (sunucu varsayılanı). */
+    /** Platformun / kliniğin dilimi — analiz yanıtındaki `tz`; gelene dek İstanbul (sunucu varsayılanı). */
     val clinicTimeZone: ZoneId
-        get() = usage?.let { runCatching { ZoneId.of(it.tz) }.getOrNull() }
-            ?: runCatching { ZoneId.of("Europe/Istanbul") }.getOrNull() ?: ZoneId.systemDefault()
+        get() = analysis?.tz?.let { runCatching { ZoneId.of(it) }.getOrNull() } ?: CreditDates.istanbul
 
-    private var usageGeneration = 0
+    /** Yalnız önizleme: örnek veri yüklüyken ağ çağrısı yapılmaz. */
+    private var ornekVeri = false
     private var rowsGeneration = 0
 
-    suspend fun loadUsage() {
-        usageGeneration += 1
-        val mine = usageGeneration
-        isLoadingUsage = true
+    /** Ekranın veri parçaları — kodsuz 403 alan parça ÇİZİLMEZ (kırmızı "hata · tekrar dene" kartı yok — M-E7.5). */
+    enum class Parca { usage, analysis, settings, eDocument, rows, people, purchases }
+
+    var gizli by mutableStateOf<Set<Parca>>(emptySet())
+        private set
+
+    private fun hataMetni(e: Throwable, yedek: String): String =
+        (e as? CreditCenterClient.ClientError.server)?.m ?: yedek
+
+    /** Parçanın hatası: yetki reddinde null (parça gizlenir), değilse ekrandaki cümle. */
+    private fun parcaHatasi(e: Throwable, p: Parca, yedek: String): String? {
+        if (Yetki.reddiMi(e)) {
+            gizli = gizli + p
+            return null
+        }
+        gizli = gizli - p
+        return hataMetni(e, yedek)
+    }
+
+    /** İptal dışındaki hatayı sonuca çevirir (Swift `Result` yardımcısı). */
+    private suspend fun <T> sonuc(f: suspend () -> T): Result<T> = try {
+        Result.success(f())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    suspend fun loadOverview() {
+        if (ornekVeri) return
+        isLoadingOverview = true
         try {
             val b = range.bounds(clinicTimeZone)
-            val u = client.usage(b.from, b.to)
-            if (mine != usageGeneration) return
-            usage = u
-            usageError = null
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            if (mine != usageGeneration) return
-            usageError = creditErrorText(e)
+            val c = client
+            coroutineScope {
+                val u = async { sonuc { c.usage() } }
+                val a = async { sonuc { c.analiz(b.from, b.to) } }
+                val s = async { sonuc { c.settings() } }
+                val e = async { sonuc { c.eBelge() } }
+                u.await().fold(
+                    { usage = it; usageError = null; gizli = gizli - Parca.usage },
+                    { usageError = parcaHatasi(it, Parca.usage, "Kredi bilgileri yüklenemedi.") },
+                )
+                a.await().fold(
+                    { analysis = it; analysisError = null; gizli = gizli - Parca.analysis },
+                    { analysisError = parcaHatasi(it, Parca.analysis, "Kullanım dağılımı yüklenemedi.") },
+                )
+                s.await().fold(
+                    { settings = it; settingsError = null; gizli = gizli - Parca.settings },
+                    { settingsError = parcaHatasi(it, Parca.settings, "Kredi bilgileri yüklenemedi.") },
+                )
+                e.await().fold(
+                    { eDocument = it; eDocumentError = null; gizli = gizli - Parca.eDocument },
+                    { eDocumentError = parcaHatasi(it, Parca.eDocument, "e-Fatura kullanımı yüklenemedi.")?.let { "e-Fatura kullanımı yüklenemedi." } },
+                )
+            }
+            KrediTarifesiStore.shared.yukle(zorla = true)
         } finally {
-            if (mine == usageGeneration) isLoadingUsage = false
+            isLoadingOverview = false
         }
     }
 
-    /** İlk sayfa (`reset`) ya da sonraki sayfa. */
+    suspend fun loadAnalysis() {
+        if (ornekVeri) return
+        val b = range.bounds(clinicTimeZone)
+        try {
+            analysis = client.analiz(b.from, b.to)
+            analysisError = null
+            gizli = gizli - Parca.analysis
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            analysisError = parcaHatasi(e, Parca.analysis, "Kullanım dağılımı yüklenemedi.")
+        }
+    }
+
+    /** Hareketler: `reset` ilk sayfa (süzgeç değişince baştan), değilse `nextCursor` ile sonraki sayfa. */
     suspend fun loadRows(reset: Boolean) {
-        val p = pagination
-        if (!reset && p != null && p.page >= p.pages) return
+        if (ornekVeri) return
+        if (!reset && nextCursor == null) return
         rowsGeneration += 1
         val mine = rowsGeneration
         isLoadingRows = true
         try {
-            val b = range.bounds(clinicTimeZone)
-            val page = if (reset) 1 else (pagination?.page ?: 0) + 1
-            val r = client.transactions(b.from, b.to, filterUser, filterFeature, filterKind, page)
+            val r = client.transactions(filter, if (reset) null else nextCursor)
             if (mine != rowsGeneration) return
-            rows = if (reset) r.rows else rows + r.rows
-            pagination = r.pagination
+            // Kimlik tekil tutulur (liste anahtarı) — sunucu aynı satırı iki sayfada verse de ekran bozulmaz.
+            rows = (if (reset) r.items else rows + r.items).distinctBy { it.id }
+            nextCursor = r.nextCursor
+            rowsLoaded = true
             rowsError = null
+            gizli = gizli - Parca.rows
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             if (mine != rowsGeneration) return
-            rowsError = creditErrorText(e)
+            rowsError = parcaHatasi(e, Parca.rows, "Kredi hareketleri yüklenemedi.")
         } finally {
             if (mine == rowsGeneration) isLoadingRows = false
         }
     }
 
-    suspend fun loadPeople() {
+    suspend fun loadPeople(more: Boolean = false) {
+        if (ornekVeri) return
         try {
-            people = client.people(month)
+            val r = client.people(month, if (more) people?.nextCursor else null)
+            val p = people
+            people = if (more && p != null) r.copy(people = (p.people + r.people).distinctBy { it.id }) else r
             peopleError = null
+            gizli = gizli - Parca.people
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            peopleError = creditErrorText(e)
+            peopleError = parcaHatasi(e, Parca.people, "Kişi kullanımı yüklenemedi.")
         }
     }
 
-    suspend fun loadPurchases() {
-        val tz = clinicTimeZone
+    suspend fun sonSatinAlmalariYukle() {
+        if (ornekVeri) return
+        val tz = CreditDates.istanbul
         val now = Instant.now()
-        val to = CreditDates.ymd(now, tz)
-        val from = CreditDates.ymd(now.minusSeconds(364 * 86_400L), tz)
+        val s = CreditFilter(
+            from = CreditDates.ymd(now.minusSeconds(365 * 86_400L), tz),
+            to = CreditDates.ymd(now, tz),
+            tur = "satin_alma",
+        )
         try {
-            purchases = client.transactions(from, to, null, null, "purchase", page = 1, limit = 10).rows
+            purchases = client.transactions(s, cursor = null, limit = 10).items.distinctBy { it.id }
             purchasesError = null
+            gizli = gizli - Parca.purchases
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            purchasesError = creditErrorText(e)
+            purchasesError = parcaHatasi(e, Parca.purchases, "Kredi hareketleri yüklenemedi.")
         }
     }
 
-    suspend fun saveLimits(userId: String, total: Double?, features: Map<String, Double>) {
-        client.saveLimits(userId, total, features)
-        loadPeople()
+    /**
+     * Limit yazımı — 409 `E_CREDIT_LIMIT_VERSION`'da liste yeniden okunur ve hata (sunucunun cümlesi) fırlatılır.
+     * Sürüm, listedeki GÜNCEL satırdan alınır: 409'dan sonra pencere açık kalır ve yeniden "Kaydet" yeni sürümle gider.
+     */
+    suspend fun saveLimits(person: CreditPeople.Person, total: Double?, features: Map<String, Double?>) {
+        val guncel = people?.people?.firstOrNull { it.id == person.id } ?: person
+        try {
+            val r = client.saveLimits(guncel.user.id, total, features, guncel.limitVersion)
+            val p = people ?: return
+            val i = p.people.indexOfFirst { it.id == person.id }
+            if (i >= 0) {
+                val yeni = p.people.toMutableList()
+                yeni[i] = yeni[i].copy(limits = r.limits, limitVersion = r.limitVersion)
+                people = p.copy(people = yeni)
+            }
+        } catch (e: CreditCenterClient.ClientError) {
+            if (e.code == "E_CREDIT_LIMIT_VERSION") loadPeople()
+            throw e
+        }
     }
 
     suspend fun saveThreshold(credits: Double) {
-        client.saveLowBalanceThreshold(credits)
-        loadUsage()
+        val v = settings?.version ?: throw CreditCenterClient.ClientError.badResponse()
+        try {
+            settings = client.saveSettings(credits, v)
+        } catch (e: CreditCenterClient.ClientError) {
+            if (e.status == 409) settings = sonuc { client.settings() }.getOrNull()
+            throw e
+        }
     }
 
-    /** Yalnız @Preview: örnek verilerle doldurur. */
-    internal fun previewFill(usage: CreditUsage?, people: CreditPeople?, rows: List<CreditTransactionsPage.Row>) {
+    suspend fun refreshEDocument() {
+        eDocument = client.eBelgeYenile()
+    }
+
+    suspend fun acceptedTerms(row: CreditTransactionsPage.Row): AcceptedTerms {
+        if (ornekVeri) return CreditPreviewData.kabul
+        return client.kosullar(row.id)
+    }
+
+    /** Yalnız @Preview: örnek verilerle doldurur (ağ çağrısı yapılmaz). */
+    internal fun ornekYukle(
+        usage: CreditUsage,
+        analysis: CreditAnalysis,
+        settings: CreditSettings,
+        eDocument: EDocumentUsage,
+        rows: List<CreditTransactionsPage.Row>,
+        people: CreditPeople,
+    ) {
+        ornekVeri = true
         this.usage = usage
-        this.people = people
+        this.analysis = analysis
+        this.settings = settings
+        this.eDocument = eDocument
         this.rows = rows
-        this.purchases = rows.filter { it.kind == "purchase" }
-        if (rows.isNotEmpty()) pagination = CreditTransactionsPage.Pagination(1, 25, rows.size, 1)
+        this.rowsLoaded = true
+        this.people = people
+        this.purchases = rows.filter { it.tur == "satin_alma" }
     }
 }
 
 /** Kredi sayısı metni: "12", "0,5", "1.250". */
 fun creditText(v: Double): String = SmileCreditFormat.credits(v)
 
-/** "12,5" / "12.5" → 12.5; boş → empty; geçersiz → invalid. */
+/** "12,5" / "12.5" → 12.5; boş → `empty`; geçersiz → `invalid` (0–üst sınır, en çok iki ondalık). */
 sealed class CreditInput {
     data object empty : CreditInput()
     data class value(val v: Double) : CreditInput()
     data object invalid : CreditInput()
 
     companion object {
+        /** Ondalık sayı (isteğe bağlı üs) — Swift `Double(String)`ın ondalık biçimi; "1d", "0x10" gibi biçimler geçersiz. */
         private val number = Regex("""^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$""")
 
-        fun parse(s: String): CreditInput {
+        fun parse(s: String, max: Double = 1_000_000.0): CreditInput {
             val t = s.trim().replace(",", ".")
             if (t.isEmpty()) return empty
             if (!number.matches(t)) return invalid
             val n = t.toDoubleOrNull() ?: return invalid
-            if (!n.isFinite() || n < 0 || n > 1_000_000) return invalid
+            if (!n.isFinite() || n < 0 || n > max) return invalid
             if (abs((n * 100).roundToLong().toDouble() - n * 100) >= 1e-6) return invalid
             return value(n)
         }

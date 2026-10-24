@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/MessageSquareText.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 1.996 10.5 c 0 -.77 .014 -1.523 .04 -2.25 c .083 -2.373 .125 -3.56 1.09 -4.533 c .966 -.972 2.186 -1.024 4.626 -1.129 a 100 100 0 0 1 4.244 -.088 c 1.48 0 2.905 .03 4.244 .088 c 2.44 .105 3.66 .157 4.626 1.13 c .965 .972 1.007 2.159 1.091 4.532 a 64 64 0 0 1 0 4.5 c -.084 2.373 -.126 3.56 -1.091 4.533 c -.965 .972 -2.186 1.024 -4.626 1.129 q -1.102 .047 -2.275 .07 c -.74 .014 -1.111 .02 -1.437 .145 c -.325 .124 -.6 .358 -1.147 .828 l -2.18 1.87 a .73 .73 0 0 1 -1.205 -.555 v -2.348 l -.244 -.01 c -2.44 -.105 -3.66 -.157 -4.626 -1.13 c -.965 -.972 -1.007 -2.159 -1.09 -4.532 a 64 64 0 0 1 -.04 -2.25 m 5.5 -2 h 9 m -9 4 h 5.5"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

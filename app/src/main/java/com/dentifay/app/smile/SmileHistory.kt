@@ -141,7 +141,8 @@ class SmileHistoryStore private constructor() {
     var items by mutableStateOf<List<SmileHistoryItem>>(emptyList())
         private set
     private var loaded = false
-    private val thumbs = mutableMapOf<UUID, Bitmap?>()
+    /** Önizleme önbelleği — arka plan iş parçacığından da yazılır (`loadThumbnail`). */
+    private val thumbs: MutableMap<UUID, Bitmap?> = java.util.Collections.synchronizedMap(mutableMapOf())
 
     sealed class StoreError : Exception() {
         object encodingFailed : StoreError()
@@ -180,6 +181,16 @@ class SmileHistoryStore private constructor() {
         if (thumbs.containsKey(item.id)) thumbs[item.id]?.let { return it }
         val t = runCatching { BitmapFactory.decodeFile(File(folder(item.id), "thumb.jpg").path) }.getOrNull()
         thumbs[item.id] = t
+        return t
+    }
+
+    /** `thumbnail` arka planda: ızgara açılırken/kaydırılırken ana iş parçacığında JPEG çözülmez. */
+    suspend fun loadThumbnail(item: SmileHistoryItem): Bitmap? {
+        thumbs[item.id]?.let { return it }
+        val t = withContext(Dispatchers.IO) {
+            runCatching { BitmapFactory.decodeFile(File(folder(item.id), "thumb.jpg").path) }.getOrNull()
+        }
+        if (t != null) thumbs[item.id] = t
         return t
     }
 

@@ -1,0 +1,6 @@
+{
+  "_aciklama": "HEKİM UNVANI — TEK EV (İş Emri 4 · Ekleme 16 · Faz 35G; arkadaşın `2157fde1` etiketindeki dosyadan, karar 12 · varsayım 21 ile değişerek). Sunucu `require` eder (`lib/hekim-unvani.js`), ön yüz `with { type: \"json\" }` ile import eder (`frontend/src/lib/hekim-adi.js`) — ikiz liste YOK. `unvanDeseni` adın BAŞINDAKİ unvan dizisini bulur (\"Dr. Ayşe\" · \"Prof. Dr. Ayşe\" · \"Dr. Dt. Ayşe\" · \"Uzm. Dt. Ali\" · \"Diş Hekimi Selin\" · \"Dyt. Ece\"); unvan ardından NOKTA ya da BOŞLUK ister (\"Drago\" bir unvan değildir). Ürünün EKLEDİĞİ unvan daima `unvan`dır; kişinin kendi unvanı (\"Prof. Dr.\") korunur, yalnız çıplak \"Dr.\" \"Dt.\" olur.",
+  "unvan": "Dt.",
+  "unvanDeseni": "^\\s*((?:(?:prof|doç|doc|uzm|op|dr|dt|dyt)(?:\\.\\s*|\\s+)|öğr(?:\\.\\s*|\\s+)üyesi\\s+|diş\\s+hekimi\\s+)+)",
+  "bayraklar": "iu"
+}

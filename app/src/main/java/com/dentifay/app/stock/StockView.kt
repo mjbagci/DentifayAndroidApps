@@ -10,20 +10,26 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridItemScope
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,26 +65,30 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.dentifay.app.auth.LocalAuthManager
 import com.dentifay.app.core.AppConfig
 import com.dentifay.app.data.LocalDataManager
+import com.dentifay.app.data.StockItem
 import com.dentifay.app.data.StockStatus
+import com.dentifay.app.notifications.ZilDugmesi
 import com.dentifay.app.theme.ButtonLabel
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.DfyAlert
@@ -97,12 +107,14 @@ import com.dentifay.app.theme.openInBrowser
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.pressable
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.LocalPencere
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.ProfilDugmesi
 import kotlinx.coroutines.launch
 import java.text.Collator
 import java.util.Locale
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 /** Stok süzgeci (Swift `StockView.StockFilter`). */
 sealed class StockFilter {
@@ -111,15 +123,52 @@ sealed class StockFilter {
     data class category(val name: String) : StockFilter()
 }
 
+/** Saf süzgeç ve düzen kuralları (Swift `categories` · `filteredItems`) — test edilebilir. */
+internal object StokSuzgeci {
+    private val tr: Locale = Locale.forLanguageTag("tr-TR")
+
+    /** İki sütun için gereken en dar alan: 2 × 360 dp kart + 12 dp ara + 2 × 16 dp kenar. */
+    val IKI_SUTUN_ESIGI: Dp = 764.dp
+
+    /** Verideki kategoriler (alfabetik — Türkçe sıralama, boşlar hariç). */
+    fun kategoriler(items: List<StockItem>, collator: Collator = Collator.getInstance(tr)): List<String> =
+        items.map { it.category }.filter { it.isNotEmpty() }.toSet().sortedWith(collator)
+
+    /** Süzgeç + ad / barkod / SKU / kategori araması (büyük-küçük harf duyarsız). */
+    fun suz(items: List<StockItem>, filter: StockFilter, arama: String): List<StockItem> {
+        val suzulen = when (filter) {
+            StockFilter.all -> items
+            StockFilter.attention -> items.filter { it.status.needsAttention }
+            is StockFilter.category -> items.filter { it.category == filter.name }
+        }
+        val q = katla(arama.trim())
+        if (q.isEmpty()) return suzulen
+        return suzulen.filter {
+            katla(it.name).contains(q) || katla(it.barcode).contains(q) ||
+                katla(it.sku).contains(q) || katla(it.category).contains(q)
+        }
+    }
+
+    /** Aramada harf katlama: Türkçe küçük harf + "ı" → "i" — "imp" hem "İmplant"ı hem Latin SKU "IMP-4"ü bulur. */
+    private fun katla(s: String): String = s.lowerTr().replace('ı', 'i')
+
+    /** Telefonda tek sütun; geniş pencerede (tablet yatay, büyük ekran) iki sütun. */
+    fun sutunSayisi(genislik: Dp): Int = if (genislik >= IKI_SUTUN_ESIGI) 2 else 1
+}
+
 /**
- * Stok — web "Stok Yönetimi" verisi (`/inventory/items`): özet sayılar, kategori süzgeci,
- * ad / barkod / SKU araması ve barkod tarama. Ürün ekleme ve düzenleme web panelinde.
+ * Stok — web "Stok Yönetimi" verisi (`/inventory/items`): özet sayılar, kategori süzgeci, ad / barkod / SKU araması ve barkod
+ * tarama. Ürün ekleme ve düzenleme web panelinde (paketin web erişimi yoksa bağlantı gizli — M-E8.6).
+ * Liste tembel ızgaradır: telefonda tek sütun (640 dp), geniş pencerede iki sütun (1040 dp, ortalı).
  */
 @Composable
 fun StockView(onShowNotifications: () -> Unit) {
     val dataManager = LocalDataManager.current
+    val auth = LocalAuthManager.current
+    val pencere = LocalPencere.current
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val onizleme = LocalInspectionMode.current
     val scope = rememberCoroutineScope()
     var searchText by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf<StockFilter>(StockFilter.all) }
@@ -128,8 +177,10 @@ fun StockView(onShowNotifications: () -> Unit) {
     var isRefreshing by remember { mutableStateOf(false) }
     // Web paneli (Custom Tab) kapanıp uygulamaya dönülünce liste yenilenir.
     var webPageOpen by remember { mutableStateOf(false) }
+    /** Ürün ekleme web'dedir — paketin web erişimi yoksa bağlantı hiç çizilmez (M-E8.6; alan yoksa `true`). */
+    val webErisimi = auth.currentUser?.webErisimi ?: true
 
-    LaunchedEffect(Unit) { dataManager.fetchInventory() }
+    LaunchedEffect(Unit) { if (!onizleme) dataManager.fetchInventory() }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -163,25 +214,11 @@ fun StockView(onShowNotifications: () -> Unit) {
         openInBrowser(context, AppConfig.webBaseURL + "/inventory")
     }
 
-    // MARK: Veri
+    // MARK: Veri — yalnız girdiler değişince yeniden hesaplanır.
     val allItems = dataManager.stockItems
-    val collator = remember { Collator.getInstance(Locale.forLanguageTag("tr-TR")) }
-    /** Verideki kategoriler (alfabetik, boşlar hariç). */
-    val categories = remember(allItems) { allItems.map { it.category }.filter { it.isNotEmpty() }.toSet().sortedWith(collator) }
-    val attentionCount = allItems.count { it.status.needsAttention }
-    val filteredItems = run {
-        var items = allItems
-        when (val f = filter) {
-            StockFilter.all -> Unit
-            StockFilter.attention -> items = items.filter { it.status.needsAttention }
-            is StockFilter.category -> items = items.filter { it.category == f.name }
-        }
-        val q = searchText.trim().lowerTr()
-        if (q.isEmpty()) items else items.filter {
-            it.name.lowerTr().contains(q) || it.barcode.lowerTr().contains(q) ||
-                it.sku.lowerTr().contains(q) || it.category.lowerTr().contains(q)
-        }
-    }
+    val categories = remember(allItems) { StokSuzgeci.kategoriler(allItems) }
+    val attentionCount = remember(allItems) { allItems.count { it.status.needsAttention } }
+    val filteredItems = remember(allItems, filter, searchText) { StokSuzgeci.suz(allItems, filter, searchText) }
 
     // Kaydırınca klavye hemen kapanır (`.scrollDismissesKeyboard(.immediately)`).
     val dismissKeyboard = remember {
@@ -192,6 +229,9 @@ fun StockView(onShowNotifications: () -> Unit) {
             }
         }
     }
+
+    // Telefonda alt çubuk için 120 (Swift); geniş pencerede yan ray — altta yalnız sistem çubuğu + boşluk.
+    val altBosluk = if (pencere.genis) WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 32.dp else 120.dp
 
     val refreshState = rememberPullToRefreshState()
     Box(Modifier.fillMaxSize()) {
@@ -215,94 +255,107 @@ fun StockView(onShowNotifications: () -> Unit) {
                 )
             },
         ) {
-            val section = Modifier.widthIn(max = 640.dp).fillMaxWidth()
-            LazyColumn(
-                Modifier.fillMaxSize().nestedScroll(dismissKeyboard).statusBarsPadding(),
-                contentPadding = PaddingValues(bottom = 120.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                item(key = "header") {
-                    StockHeader(onShowNotifications, section.appear(0.0))
-                }
-                item(key = "summary") {
-                    val stats = dataManager.stockStats
-                    SummaryStrip(
-                        total = stats?.totalItems ?: allItems.size,
-                        low = stats?.lowStock ?: allItems.count { it.status == StockStatus.low },
-                        out = stats?.outOfStock ?: allItems.count { it.status == StockStatus.out },
-                        redacted = dataManager.isLoadingStock && !dataManager.hasLoadedStock && allItems.isEmpty(),
-                        modifier = section.padding(top = 18.dp).appear(0.04),
-                    )
-                }
-                item(key = "search") {
-                    SearchAndScanBar(
-                        searchText = searchText,
-                        onSearchChange = { searchText = it },
-                        onScan = { openScanner() },
-                        modifier = section.padding(top = 18.dp).appear(0.08),
-                    )
-                }
-                if (allItems.isNotEmpty()) {
-                    item(key = "chips") {
-                        FilterChips(
-                            allCount = allItems.size,
-                            attentionCount = attentionCount,
-                            categories = categories,
-                            filter = filter,
-                            onFilter = { filter = it },
-                            modifier = section.padding(top = 18.dp).appear(0.12),
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val sutun = StokSuzgeci.sutunSayisi(maxWidth)
+                val icerik = if (sutun > 1) 1040.dp else 640.dp
+                // Izgara tam genişlikte kalır (kenarlardan da kaydırılır); içerik `icerik` genişliğinde ortalanır.
+                val kenar = ((maxWidth - icerik) / 2).coerceAtLeast(0.dp)
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(sutun),
+                    modifier = Modifier.fillMaxSize().nestedScroll(dismissKeyboard).statusBarsPadding(),
+                    contentPadding = PaddingValues(start = kenar, end = kenar, bottom = altBosluk),
+                ) {
+                    tamSatir("header") {
+                        StockHeader(onShowNotifications, Modifier.appear(0.0))
+                    }
+                    tamSatir("summary") {
+                        val stats = dataManager.stockStats
+                        SummaryStrip(
+                            total = stats?.totalItems ?: allItems.size,
+                            low = stats?.lowStock ?: allItems.count { it.status == StockStatus.low },
+                            out = stats?.outOfStock ?: allItems.count { it.status == StockStatus.out },
+                            redacted = dataManager.isLoadingStock && !dataManager.hasLoadedStock && allItems.isEmpty(),
+                            modifier = Modifier.padding(top = 18.dp).appear(0.04),
                         )
                     }
-                }
-
-                // MARK: Liste
-                when {
-                    dataManager.isLoadingStock && allItems.isEmpty() && !dataManager.hasLoadedStock -> item(key = "loading") {
-                        Box(section.padding(top = 18.dp + 50.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(Modifier.size(28.dp), color = DS.Colors.cyan400, strokeWidth = 2.5.dp)
-                        }
+                    tamSatir("search") {
+                        SearchAndScanBar(
+                            searchText = searchText,
+                            onSearchChange = { searchText = it },
+                            onScan = { openScanner() },
+                            modifier = Modifier.padding(top = 18.dp).appear(0.08),
+                        )
                     }
-                    allItems.isEmpty() && dataManager.stockLoadFailed -> item(key = "failed") {
-                        StateView(
-                            "exclamationmark.triangle", "Stok listesi yüklenemedi",
-                            "Bağlantınızı kontrol edip tekrar deneyin.", section.padding(top = 18.dp),
-                        ) {
-                            SecondaryButton(onClick = { scope.launch { dataManager.fetchInventory() } }, modifier = Modifier.width(180.dp)) {
-                                ButtonLabel("Tekrar dene")
-                            }
-                        }
-                    }
-                    allItems.isEmpty() -> item(key = "empty") {
-                        StateView(
-                            "shippingbox", "Henüz stok kaydı yok",
-                            "Ürünleri web panelindeki Stok Yönetimi'nden ekleyebilirsiniz.", section.padding(top = 18.dp),
-                        ) {
-                            AddProductButton(Modifier.fillMaxWidth()) { openAddProduct() }
-                        }
-                    }
-                    filteredItems.isEmpty() -> item(key = "noMatch") {
-                        StateView(
-                            "magnifyingglass", "Eşleşen ürün yok",
-                            if (searchText.isEmpty()) "Bu süzgeçte ürün bulunmuyor." else "“$searchText” için sonuç bulunamadı.",
-                            section.padding(top = 18.dp),
-                        ) {
-                            SecondaryButton(onClick = { searchText = ""; filter = StockFilter.all }, modifier = Modifier.width(200.dp)) {
-                                ButtonLabel("Süzgeci temizle")
-                            }
-                        }
-                    }
-                    else -> {
-                        itemsIndexed(filteredItems, key = { _, item -> item.id }) { index, item ->
-                            StockItemCard(
-                                item,
-                                section
-                                    .padding(top = if (index == 0) 18.dp else 10.dp)
-                                    .padding(horizontal = 16.dp)
-                                    .appear(0.14 + min(index, 8) * 0.04),
+                    if (allItems.isNotEmpty()) {
+                        tamSatir("chips") {
+                            FilterChips(
+                                allCount = allItems.size,
+                                attentionCount = attentionCount,
+                                categories = categories,
+                                filter = filter,
+                                onFilter = { filter = it },
+                                modifier = Modifier.padding(top = 18.dp).appear(0.12),
                             )
                         }
-                        item(key = "add") {
-                            AddProductButton(section.padding(top = 14.dp).padding(horizontal = 16.dp)) { openAddProduct() }
+                    }
+
+                    // MARK: Liste
+                    when {
+                        dataManager.isLoadingStock && allItems.isEmpty() && !dataManager.hasLoadedStock -> tamSatir("loading") {
+                            Box(Modifier.fillMaxWidth().padding(top = 18.dp + 50.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(28.dp), color = DS.Colors.cyan400, strokeWidth = 2.5.dp)
+                            }
+                        }
+                        allItems.isEmpty() && dataManager.stockLoadFailed -> tamSatir("failed") {
+                            StateView(
+                                "exclamationmark.triangle", "Stok listesi yüklenemedi",
+                                "Bağlantınızı kontrol edip tekrar deneyin.", Modifier.padding(top = 18.dp),
+                            ) {
+                                SecondaryButton(onClick = { scope.launch { dataManager.fetchInventory() } }, modifier = Modifier.width(180.dp)) {
+                                    ButtonLabel("Tekrar dene")
+                                }
+                            }
+                        }
+                        allItems.isEmpty() -> tamSatir("empty") {
+                            StateView(
+                                "shippingbox", "Henüz stok kaydı yok",
+                                "Ürünleri web panelindeki Stok Yönetimi'nden ekleyebilirsiniz.", Modifier.padding(top = 18.dp),
+                            ) {
+                                if (webErisimi) AddProductButton(Modifier.fillMaxWidth()) { openAddProduct() }
+                            }
+                        }
+                        filteredItems.isEmpty() -> tamSatir("noMatch") {
+                            StateView(
+                                "magnifyingglass", "Eşleşen ürün yok",
+                                if (searchText.isEmpty()) "Bu süzgeçte ürün bulunmuyor." else "“$searchText” için sonuç bulunamadı.",
+                                Modifier.padding(top = 18.dp),
+                            ) {
+                                SecondaryButton(onClick = { searchText = ""; filter = StockFilter.all }, modifier = Modifier.width(200.dp)) {
+                                    ButtonLabel("Süzgeci temizle")
+                                }
+                            }
+                        }
+                        else -> {
+                            itemsIndexed(filteredItems, key = { _, item -> item.id }, contentType = { _, _ -> "stok" }) { index, item ->
+                                // Dış kenar 16 dp, sütunlar arası 12 dp (Swift `LazyVStack(spacing: 10)` + `.padding(.horizontal, 16)`).
+                                val sira = index % sutun
+                                StockItemCard(
+                                    item,
+                                    Modifier
+                                        .padding(
+                                            start = if (sira == 0) 16.dp else 6.dp,
+                                            end = if (sira == sutun - 1) 16.dp else 6.dp,
+                                            top = if (index < sutun) 18.dp else 10.dp,
+                                        )
+                                        .appear(0.14 + min(index, 8) * 0.04),
+                                    esitYukseklik = sutun > 1,
+                                )
+                            }
+                            if (webErisimi) {
+                                tamSatir("add") {
+                                    AddProductButton(Modifier.padding(top = 14.dp).padding(horizontal = 16.dp)) { openAddProduct() }
+                                }
+                            }
                         }
                     }
                 }
@@ -330,6 +383,11 @@ fun StockView(onShowNotifications: () -> Unit) {
     )
 }
 
+/** Izgarada tam satır kaplayan bölüm (başlık, özet, arama, süzgeç, durumlar). */
+private fun LazyGridScope.tamSatir(key: String, content: @Composable LazyGridItemScope.() -> Unit) {
+    item(key = key, span = { GridItemSpan(maxLineSpan) }, contentType = key, content = content)
+}
+
 // MARK: - Başlık
 
 @Composable
@@ -339,16 +397,9 @@ private fun StockHeader(onShowNotifications: () -> Unit, modifier: Modifier = Mo
         subtitle = "Malzeme ve ürün takibi, stok hareketleri",
         modifier = modifier.padding(top = 8.dp).padding(horizontal = 16.dp),
     ) {
-        Box(
-            Modifier
-                .size(40.dp)
-                .background(Color.White.copy(alpha = 0.04f), CircleShape)
-                .border(1.dp, DS.Colors.hairline, CircleShape)
-                .semantics { contentDescription = "Bildirimler" }
-                .plainClickable(onClick = onShowNotifications),
-            contentAlignment = Alignment.Center,
-        ) {
-            DfyIcon("bell", size = 17.dp, tint = DS.Colors.metal)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            ZilDugmesi(action = onShowNotifications)
+            ProfilDugmesi()
         }
     }
 }
@@ -380,11 +431,12 @@ private fun SummaryCell(value: Int, label: String, color: Color, redacted: Boole
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(
             "$value", Modifier.placeholder(redacted),
-            style = sys(19, FontWeight.Bold).monoDigits(), color = if (redacted) Color.Transparent else color,
+            style = sys(19, FontWeight.Bold).monoDigits(), color = if (redacted) Color.Transparent else color, maxLines = 1,
         )
         Text(
-            label, Modifier.placeholder(redacted),
+            label, Modifier.placeholder(redacted).padding(horizontal = 4.dp),
             style = sys(12, FontWeight.Medium), color = if (redacted) Color.Transparent else DS.Colors.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -423,7 +475,9 @@ private fun SearchAndScanBar(searchText: String, onSearchChange: (String) -> Uni
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
-                        if (searchText.isEmpty()) Text("Ad, barkod ya da SKU", style = sys(15), color = DS.Colors.outline, maxLines = 1)
+                        if (searchText.isEmpty()) {
+                            Text("Ad, barkod ya da SKU", style = sys(15), color = DS.Colors.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                         inner()
                     }
                 },
@@ -450,13 +504,17 @@ private fun SearchAndScanBar(searchText: String, onSearchChange: (String) -> Uni
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             DfyIcon("barcode.viewfinder", size = 17.dp, tint = Color.White)
-            Text("Tara", style = sys(14, FontWeight.SemiBold), color = Color.White)
+            Text("Tara", style = sys(14, FontWeight.SemiBold), color = Color.White, maxLines = 1)
         }
     }
 }
 
 // MARK: - Süzgeç
 
+/**
+ * Süzgeç çipleri — seçili kapsül çipler arasında kayar (`matchedGeometryEffect`). Kapsül çizim aşamasında çizilir: kayma
+ * animasyonu yeniden oluşturma/yerleşim tetiklemez.
+ */
 @Composable
 private fun FilterChips(
     allCount: Int,
@@ -466,15 +524,14 @@ private fun FilterChips(
     onFilter: (StockFilter) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val density = LocalDensity.current
-    // Her çipin satır içindeki konumu/genişliği (px) — seçili kapsül aralarında kayar (`matchedGeometryEffect`).
+    // Her çipin satır içindeki konumu/genişliği (px) — yalnız yerleşim değişince yazılır (kaydırmada değil).
     val bounds = remember { mutableStateMapOf<StockFilter, Pair<Float, Float>>() }
     val indicatorX = remember { Animatable(0f) }
     val indicatorW = remember { Animatable(0f) }
     var placed by remember { mutableStateOf(false) }
     val selectedBounds = bounds[filter]
     val selectedTint = if (filter == StockFilter.attention) DS.Colors.warning else DS.Colors.cyan400
-    val tint by animateColorAsState(selectedTint, Motion.spring(0.32, 0.8), label = "chipTint")
+    val tint = animateColorAsState(selectedTint, Motion.spring(0.32, 0.8), label = "chipTint")
 
     LaunchedEffect(selectedBounds) {
         val b = selectedBounds ?: return@LaunchedEffect
@@ -494,18 +551,29 @@ private fun FilterChips(
         onFilter(if (on && value != StockFilter.all) StockFilter.all else value)
     }
 
+    val kapsulVar = selectedBounds != null && placed
     Box(modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-        if (selectedBounds != null && placed) {
-            Box(
-                Modifier
-                    .offset { IntOffset(indicatorX.value.roundToInt(), 0) }
-                    .width(with(density) { indicatorW.value.toDp() })
-                    .height(34.dp)
-                    .background(tint.copy(alpha = 0.12f), CircleShape)
-                    .border(1.dp, tint.copy(alpha = 0.45f), CircleShape)
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.drawBehind {
+                if (!kapsulVar) return@drawBehind
+                val h = 34.dp.toPx()
+                val y = (size.height - h) / 2f
+                val w = indicatorW.value
+                val x = indicatorX.value
+                val c = tint.value
+                drawRoundRect(c.copy(alpha = 0.12f), topLeft = Offset(x, y), size = Size(w, h), cornerRadius = CornerRadius(h / 2f))
+                val sw = 1.dp.toPx()
+                drawRoundRect(
+                    c.copy(alpha = 0.45f),
+                    topLeft = Offset(x + sw / 2f, y + sw / 2f),
+                    size = Size(w - sw, h - sw),
+                    cornerRadius = CornerRadius((h - sw) / 2f),
+                    style = Stroke(width = sw),
+                )
+            },
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             ChipEntry("Tümü", allCount, StockFilter.all, filter, DS.Colors.cyan400, bounds, ::chipTap)
             if (attentionCount > 0) ChipEntry("Dikkat", attentionCount, StockFilter.attention, filter, DS.Colors.warning, bounds, ::chipTap)
             if (categories.isNotEmpty()) {
@@ -530,7 +598,7 @@ private fun ChipEntry(
     key(value) {
         FilterChip(
             title, count, on = filter == value, tint = tint,
-            modifier = Modifier.onGloballyPositioned { c ->
+            modifier = Modifier.onPlaced { c ->
                 bounds[value] = c.positionInParent().x to c.size.width.toFloat()
             },
         ) { onTap(value) }
@@ -554,7 +622,7 @@ private fun FilterChip(title: String, count: Int?, on: Boolean, tint: Color, mod
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(title, style = sys(13, weight), color = fg, maxLines = 1)
-        if (count != null) Text("$count", style = sys(13, weight).monoDigits(), color = countColor)
+        if (count != null) Text("$count", style = sys(13, weight).monoDigits(), color = countColor, maxLines = 1)
     }
 }
 
@@ -563,7 +631,7 @@ private fun FilterChip(title: String, count: Int?, on: Boolean, tint: Color, mod
 @Composable
 private fun StateView(icon: String, title: String, detail: String, modifier: Modifier = Modifier, action: @Composable () -> Unit) {
     Column(
-        modifier.padding(horizontal = 32.dp).padding(top = 40.dp),
+        modifier.fillMaxWidth().padding(horizontal = 32.dp).padding(top = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -597,7 +665,7 @@ private fun AddProductButton(modifier: Modifier = Modifier, onClick: () -> Unit)
         verticalAlignment = Alignment.CenterVertically,
     ) {
         DfyIcon("plus", size = 14.dp, tint = DS.Colors.onSurfaceVariant)
-        Text("Ürün ekle", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
+        Text("Ürün ekle", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant, maxLines = 1)
         DfyIcon("arrow.up.right", size = 11.dp, tint = DS.Colors.outline)
     }
 }
@@ -606,6 +674,14 @@ private fun AddProductButton(modifier: Modifier = Modifier, onClick: () -> Unit)
 @Composable
 private fun StockViewPreview() {
     PreviewEnv {
+        StockView(onShowNotifications = {})
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun StockViewTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) {
         StockView(onShowNotifications = {})
     }
 }

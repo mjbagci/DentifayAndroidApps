@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Zap.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="m 5.226 11.33 l 6.998 -8.983 c .547 -.703 1.573 -.266 1.573 .67 V 9.97 c 0 .56 .402 1.015 .899 1.015 H 18.1 c .773 0 1.185 1.03 .674 1.686 l -6.998 8.983 c -.547 .702 -1.573 .265 -1.573 -.671 V 14.03 c 0 -.56 -.403 -1.015 -.899 -1.015 H 5.9 c -.773 0 -1.185 -1.03 -.674 -1.686"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

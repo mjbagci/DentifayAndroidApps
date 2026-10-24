@@ -1,30 +1,38 @@
 package com.dentifay.app.notifications
 
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.EventBusy
+import androidx.compose.material.icons.outlined.MeetingRoom
+import androidx.compose.material.icons.outlined.Percent
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -32,8 +40,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,20 +55,22 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dentifay.app.core.APINotification
 import com.dentifay.app.core.ApiClient
-import com.dentifay.app.core.Unvan
+import com.dentifay.app.core.ApiException
+import com.dentifay.app.core.Yetki
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.DfyIcon
 import com.dentifay.app.theme.Haptics
 import com.dentifay.app.theme.IconTile
 import com.dentifay.app.theme.IconTileSize
 import com.dentifay.app.theme.IconTone
-import com.dentifay.app.theme.Motion
+import com.dentifay.app.theme.PingDot
 import com.dentifay.app.theme.WebBackdrop
 import com.dentifay.app.theme.glassCard
-import com.dentifay.app.theme.monoDigits
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.icerikGenisligi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
@@ -62,86 +78,163 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
+import java.time.temporal.ChronoUnit
 
 /**
- * Bildirim kutusu — web'deki zil menüsüyle aynı veri (`/api/bildirimler`): "Bildirimler"
- * (INBOX) ve "Anlık uyarılar" (ALERT). Başlık ve gövde türden kurulur (web `notifications.types`).
+ * Bildirim kutusu — web'deki zil menüsüyle aynı veri (`/api/bildirimler`, sözleşme §5): TEK liste (`kanal` ayrımı kalktı),
+ * `{unread}` sayacı, gövdesiz toplu okundu, satıra dokununca tek okundu. Başlık/gövde `BildirimMetni` ile web'in kuralından
+ * kurulur; tanınmayan tür ÇİZİLMEZ.
  * Swift `NotificationsStore.shared` → hem `NotificationsStore.x` hem `NotificationsStore.shared.x` çalışır.
  */
 object NotificationsStore {
     val shared: NotificationsStore get() = this
 
-    enum class Channel(val rawValue: String) {
-        inbox("INBOX"), alert("ALERT");
-
-        val id: String get() = rawValue
-        val title: String get() = if (this == inbox) "Bildirimler" else "Anlık uyarılar"
-        val emptyText: String get() = if (this == inbox) "Bildirim yok." else "Anlık uyarı yok."
-    }
-
-    var items by mutableStateOf<Map<Channel, List<APINotification>>>(emptyMap())
+    var items by mutableStateOf<List<APINotification>>(emptyList())
         private set
-    var unread by mutableStateOf<Map<Channel, Int>>(emptyMap())
+    /** Bütün zillerin TEK sayacı (sunucunun `unread`i). */
+    var unread by mutableIntStateOf(0)
         private set
+    /** `unread` ile aynı (ana ekran rozeti ve eski çağıranlar için). */
+    val unreadTotal: Int get() = unread
     var isLoading by mutableStateOf(false)
         private set
     var errorMessage by mutableStateOf<String?>(null)
         private set
+    var sayfa by mutableIntStateOf(1)
+        private set
+    var sayfaSayisi by mutableIntStateOf(1)
+        private set
+    val dahaVar: Boolean get() = sayfa < sayfaSayisi
 
-    /** Ekran kapanırken sayaç tazelemesi gibi ekrandan bağımsız işler. */
+    /** Çizilecek satırlar — kayıt defterinde olmayan tür gösterilmez (sayaç yine sunucunundur). */
+    val gorunenler: List<APINotification> get() = items.filter { BildirimMetni.gorunur(it) }
+
+    /**
+     * Ekrandan bağımsız işler (Swift `Task { }`): okundu işaretleri, "Daha fazla", kapanışta sayaç — sayfa kapansa da
+     * yarıda kesilmez.
+     */
     internal val scope = MainScope()
 
-    val unreadTotal: Int get() = unread.values.sum()
+    /** Yalnız önizleme örneği yüklüyken ağ isteği yapılmaz. */
+    private var ornekVeri = false
 
     suspend fun refreshCounts() {
-        val c = try { ApiClient.fetchNotificationCount() } catch (e: CancellationException) { throw e } catch (e: Exception) { return }
-        unread = unread + (Channel.inbox to c.inbox) + (Channel.alert to c.alert)
+        if (ornekVeri) return
+        val c = try {
+            ApiClient.fetchNotificationCount()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return
+        }
+        unread = c.unread
     }
 
-    suspend fun load(channel: Channel) {
+    suspend fun load() {
+        if (ornekVeri) return
         isLoading = true
         try {
-            val list = ApiClient.fetchNotifications(channel.rawValue)
-            items = items + (channel to list.items)
-            list.unread?.let { u -> unread = unread + (channel to u) }
+            val list = ApiClient.fetchNotifications(page = 1)
+            items = list.items
+            sayfa = list.pagination?.page ?: 1
+            sayfaSayisi = list.pagination?.pages ?: 1
+            list.unread?.let { unread = it }
             errorMessage = null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            errorMessage = "Bildirimler yüklenemedi."
+            // Kodsuz 403: liste boş kalır, kırmızı kart yok (M-E7.5).
+            errorMessage = if (Yetki.reddiMi(e)) null else "Bildirimler yüklenemedi."
         } finally {
             isLoading = false
         }
     }
 
-    suspend fun markAllRead(channel: Channel) {
+    /** "Daha fazla" — sonraki sayfayı EKLER. */
+    suspend fun loadMore() {
+        if (!dahaVar || isLoading || ornekVeri) return
+        isLoading = true
         try {
-            ApiClient.markNotificationsRead(channel.rawValue)
-            unread = unread + (channel to 0)
-            load(channel)
+            val list = ApiClient.fetchNotifications(page = sayfa + 1)
+            val mevcut = items.mapTo(HashSet()) { it.id }
+            items = items + list.items.filter { it.id !in mevcut }
+            sayfa = list.pagination?.page ?: (sayfa + 1)
+            sayfaSayisi = list.pagination?.pages ?: sayfaSayisi
+            list.unread?.let { unread = it }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            errorMessage = "Okundu işareti kaydedilemedi."
+            // Kodsuz 403: liste boş kalır, kırmızı kart yok (M-E7.5).
+            errorMessage = if (Yetki.reddiMi(e)) null else "Bildirimler yüklenemedi."
+        } finally {
+            isLoading = false
         }
     }
 
-    /** Yalnız önizleme için örnek veri. */
-    internal fun seedPreview(list: List<APINotification>) {
-        items = mapOf(Channel.inbox to list)
-        unread = mapOf(Channel.inbox to list.count { it.isUnread }, Channel.alert to 1)
+    suspend fun markAllRead() {
+        if (ornekVeri) {
+            unread = 0
+            return
+        }
+        try {
+            ApiClient.markAllNotificationsRead()
+            unread = 0
+            load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            errorMessage = if (Yetki.reddiMi(e)) Yetki.EYLEM_YETKISIZ_METNI else "Okundu işareti kaydedilemedi."
+        }
+    }
+
+    /**
+     * Satıra dokunuş: okunmamışsa tek okundu ucu; sayaç yerelde 1 düşer, sonra sunucudan tazelenir.
+     * Hedef ekrana gitme (§8) bu eklemede YOK (iOS ile aynı).
+     */
+    suspend fun markRead(n: APINotification) {
+        val i = items.indexOfFirst { it.id == n.id }
+        if (i < 0 || !items[i].isUnread) return
+        val simdi = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString()
+        items = items.toMutableList().also { it[i] = it[i].copy(readAt = simdi) }
+        unread = maxOf(0, unread - 1)
+        if (ornekVeri) return
+        try {
+            ApiClient.markNotificationRead(n.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if ((e as? ApiException)?.status == 404) {
+                items = items.filterNot { it.id == n.id }          // 404 sessiz: satır düşer
+            } else {
+                errorMessage = if (Yetki.reddiMi(e)) Yetki.EYLEM_YETKISIZ_METNI else "Okundu işareti kaydedilemedi."
+            }
+        }
+        refreshCounts()
+    }
+
+    /** Yalnız @Preview: örnek liste (ağ isteği yapılmaz). */
+    internal fun onizlemeYukle(liste: List<APINotification>) {
+        ornekVeri = true
+        items = liste
+        unread = liste.count { it.isUnread }
+        sayfa = 1
+        sayfaSayisi = 1
+        errorMessage = null
     }
 }
 
-/** Bildirimler sayfası. Sunan taraf `DfySheet` içinde gösterir. */
+/**
+ * Bildirimler sayfası. Sunan taraf `DfySheet` içinde gösterir (tablette 640 dp; liste en çok 720 dp — okunur satır boyu).
+ * Uzun liste tembel (`LazyColumn`, kararlı anahtarlar).
+ */
 @Composable
 fun NotificationsView(onDismiss: () -> Unit) {
     val store = NotificationsStore.shared
-    var channel by remember { mutableStateOf(NotificationsStore.Channel.inbox) }
-    var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var yenileniyor by remember { mutableStateOf(false) }
+    val liste by remember { derivedStateOf { store.gorunenler } }
 
-    LaunchedEffect(channel) { store.load(channel) }
+    LaunchedEffect(Unit) { store.load() }
     DisposableEffect(Unit) {
         onDispose { store.scope.launch { store.refreshCounts() } }
     }
@@ -150,69 +243,69 @@ fun NotificationsView(onDismiss: () -> Unit) {
         WebBackdrop()
         Column(Modifier.fillMaxSize()) {
             // Gezinme çubuğu (inline başlık): solda "Tümünü okundu say", sağda "Kapat".
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .background(DS.Colors.background)
-                    .padding(horizontal = 16.dp),
-            ) {
-                if ((store.unread[channel] ?: 0) > 0) {
-                    Text(
-                        "Tümünü okundu say",
-                        Modifier
-                            .align(Alignment.CenterStart)
-                            .plainClickable {
-                                Haptics.light()
-                                scope.launch { store.markAllRead(channel) }
-                            },
-                        style = sys(14, FontWeight.Medium), color = DS.Colors.cyan400,
-                    )
-                }
-                Text("Bildirimler", Modifier.align(Alignment.Center), style = sys(17, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                Text(
-                    "Kapat",
-                    Modifier.align(Alignment.CenterEnd).plainClickable(onClick = onDismiss),
-                    style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface,
-                )
-            }
+            UstCubuk(
+                baslik = "Bildirimler",
+                modifier = Modifier.background(DS.Colors.background),
+                sol = {
+                    if (store.unread > 0) {
+                        MetinDugmesi("Tümünü okundu say", sys(14, FontWeight.Medium), DS.Colors.cyan400) {
+                            Haptics.light()
+                            store.scope.launch { store.markAllRead() }
+                        }
+                    }
+                },
+                sag = { MetinDugmesi("Kapat", sys(15, FontWeight.SemiBold), DS.Colors.onSurface, onClick = onDismiss) },
+            )
 
             PullToRefreshBox(
-                isRefreshing = refreshing,
+                isRefreshing = yenileniyor,
                 onRefresh = {
                     scope.launch {
-                        refreshing = true
-                        store.load(channel)
-                        refreshing = false
+                        yenileniyor = true
+                        store.load()
+                        yenileniyor = false
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp)
-                        .padding(top = 8.dp, bottom = 24.dp),
+                val hata = store.errorMessage
+                LazyColumn(
+                    Modifier.fillMaxHeight().icerikGenisligi(720.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    ChannelPicker(channel, store.unread, Modifier.padding(bottom = 6.dp)) { c ->
-                        Haptics.selection()
-                        channel = c
-                    }
-
-                    val list = store.items[channel] ?: emptyList()
-                    val error = store.errorMessage
                     when {
-                        store.isLoading && list.isEmpty() ->
+                        store.isLoading && liste.isEmpty() -> item(key = "yukleniyor", contentType = "durum") {
                             Box(Modifier.fillMaxWidth().padding(top = 60.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(Modifier.size(22.dp), color = DS.Colors.cyan400, strokeWidth = 2.dp)
                             }
-                        error != null && list.isEmpty() ->
-                            StateView("exclamationmark.triangle", error, retry = true) { scope.launch { store.load(channel) } }
-                        list.isEmpty() ->
-                            StateView("bell.slash", channel.emptyText, retry = false) {}
-                        else -> list.forEach { item -> NotificationRow(item) }
+                        }
+                        hata != null && liste.isEmpty() -> item(key = "hata", contentType = "durum") {
+                            DurumGorunumu("exclamationmark.triangle", hata, tekrar = true) {
+                                store.scope.launch { store.load() }
+                            }
+                        }
+                        liste.isEmpty() -> item(key = "bos", contentType = "durum") {
+                            DurumGorunumu("bell.slash", "Bildirim yok.", tekrar = false) {}
+                        }
+                        else -> {
+                            items(liste, key = { it.id }, contentType = { "bildirim" }) { bildirim ->
+                                BildirimSatiri(bildirim) { store.scope.launch { store.markRead(bildirim) } }
+                            }
+                            if (store.dahaVar) {
+                                item(key = "daha", contentType = "daha") {
+                                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            "Daha fazla",
+                                            Modifier
+                                                .plainClickable { store.scope.launch { store.loadMore() } }
+                                                .padding(vertical = 8.dp),
+                                            style = sys(14, FontWeight.SemiBold), color = DS.Colors.cyan400,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -220,68 +313,100 @@ fun NotificationsView(onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * Zil düğmesi + okunmamış rozeti — ana ekran, Analiz Merkezi, Stok, Tedavi Planı ve Ayarlar AYNI bileşeni ve AYNI sayacı
+ * (`NotificationsStore.shared.unread`) kullanır (M-E1.6.4; ikinci rozet yazılmaz). Swift `ZilDugmesi(action:)`.
+ */
 @Composable
-private fun ChannelPicker(
-    channel: NotificationsStore.Channel,
-    unread: Map<NotificationsStore.Channel, Int>,
-    modifier: Modifier = Modifier,
-    onSelect: (NotificationsStore.Channel) -> Unit,
-) {
-    val outer = RoundedCornerShape(12.dp)
-    Row(
+fun ZilDugmesi(action: () -> Unit) = ZilDugmesi(Modifier, action)
+
+@Composable
+fun ZilDugmesi(modifier: Modifier, action: () -> Unit) {
+    val okunmamis = NotificationsStore.shared.unread
+    Box(
         modifier
-            .fillMaxWidth()
-            .clip(outer)
-            .background(Color.White.copy(alpha = 0.03f))
-            .border(1.dp, DS.Colors.hairline, outer)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .size(40.dp)
+            .background(Color.White.copy(alpha = 0.04f), CircleShape)
+            .border(1.dp, DS.Colors.hairline, CircleShape)
+            .plainClickable { Haptics.light(); action() }
+            .semantics {
+                contentDescription = if (okunmamis > 0) "Bildirimler, $okunmamis okunmamış" else "Bildirimler"
+                role = Role.Button
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        NotificationsStore.Channel.entries.forEach { c ->
-            val on = c == channel
-            // Seçili arka plan easeOut 0.18 sn ile geçer.
-            val bgAlpha by animateFloatAsState(if (on) 1f else 0f, Motion.easeOut(180), label = "seg")
-            val shape = RoundedCornerShape(9.dp)
-            Row(
-                Modifier
-                    .weight(1f)
-                    .clip(shape)
-                    .background(Color.White.copy(alpha = 0.07f * bgAlpha))
-                    .border(1.dp, DS.Colors.hairlineStrong.copy(alpha = DS.Colors.hairlineStrong.alpha * bgAlpha), shape)
-                    .plainClickable { onSelect(c) }
-                    .padding(vertical = 9.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val fg = if (on) Color.White else DS.Colors.onSurfaceVariant
-                Text(c.title, style = sys(14, if (on) FontWeight.SemiBold else FontWeight.Medium), color = fg, maxLines = 1)
-                val n = unread[c]
-                if (n != null && n > 0) {
-                    Text(
-                        "$n",
-                        Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(DS.Colors.cyan400.copy(alpha = 0.2f))
-                            .padding(horizontal = 6.dp, vertical = 1.dp),
-                        style = sys(11, FontWeight.Bold).monoDigits(), color = fg,
-                    )
-                }
-            }
+        DfyIcon("bell", size = 17.dp, tint = DS.Colors.metal)
+        if (okunmamis > 0) {
+            PingDot(DS.Colors.purple500, Modifier.align(Alignment.TopEnd).offset(x = (-6).dp, y = 6.dp), size = 8.dp)
+        }
+    }
+}
+
+// MARK: - Gezinme çubuğu
+
+/**
+ * Inline gezinme çubuğu: başlık ortada; sol/sağ düğmeler genişse başlık aradaki boşluğa kayar, sığmazsa kısalır
+ * (iOS gezinme çubuğu davranışı) — dar telefonda ve büyük yazı boyutunda üst üste binme yok.
+ */
+@Composable
+private fun UstCubuk(
+    baslik: String,
+    modifier: Modifier = Modifier,
+    sol: @Composable () -> Unit = {},
+    sag: @Composable () -> Unit = {},
+) {
+    Layout(
+        content = {
+            Box(contentAlignment = Alignment.CenterStart) { sol() }
+            Box(contentAlignment = Alignment.CenterEnd) { sag() }
+            Text(
+                baslik, style = sys(17, FontWeight.SemiBold), color = DS.Colors.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        },
+        modifier = modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 16.dp),
+    ) { olculer, kisit ->
+        val w = kisit.maxWidth
+        val bosluk = 8.dp.roundToPx()
+        val serbest = kisit.copy(minWidth = 0, minHeight = 0)
+        val solP = olculer[0].measure(serbest.copy(maxWidth = (w * 0.45f).toInt()))
+        val sagP = olculer[1].measure(serbest.copy(maxWidth = (w * 0.35f).toInt()))
+        val aralik = (w - solP.width - sagP.width - 2 * bosluk).coerceAtLeast(0)
+        val baslikP = olculer[2].measure(serbest.copy(maxWidth = aralik))
+        val h = maxOf(kisit.minHeight, solP.height, sagP.height, baslikP.height)
+        layout(w, h) {
+            solP.placeRelative(0, (h - solP.height) / 2)
+            sagP.placeRelative(w - sagP.width, (h - sagP.height) / 2)
+            val enAz = solP.width + bosluk
+            val enCok = maxOf(enAz, w - sagP.width - bosluk - baslikP.width)
+            baslikP.placeRelative(((w - baslikP.width) / 2).coerceIn(enAz, enCok), (h - baslikP.height) / 2)
         }
     }
 }
 
 @Composable
-private fun StateView(icon: String, text: String, retry: Boolean, onRetry: () -> Unit) {
+private fun MetinDugmesi(metin: String, stil: TextStyle, renk: Color, onClick: () -> Unit) {
+    Text(
+        metin,
+        Modifier.plainClickable(onClick = onClick).padding(vertical = 8.dp),
+        style = stil, color = renk, maxLines = 1, overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun DurumGorunumu(ikon: String, metin: String, tekrar: Boolean, onTekrar: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().padding(top = 70.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        DfyIcon(icon, size = 30.dp, tint = DS.Colors.metal)
-        Text(text, style = sys(15, FontWeight.Medium), color = DS.Colors.onSurfaceVariant, textAlign = TextAlign.Center)
-        if (retry) {
-            Text("Tekrar dene", Modifier.plainClickable(onClick = onRetry), style = sys(14, FontWeight.SemiBold), color = DS.Colors.cyan400)
+        DfyIcon(ikon, size = 30.dp, tint = DS.Colors.metal)
+        Text(metin, style = sys(15, FontWeight.Medium), color = DS.Colors.onSurfaceVariant, textAlign = TextAlign.Center)
+        if (tekrar) {
+            Text(
+                "Tekrar dene", Modifier.plainClickable(onClick = onTekrar).padding(vertical = 4.dp),
+                style = sys(14, FontWeight.SemiBold), color = DS.Colors.cyan400,
+            )
         }
     }
 }
@@ -289,161 +414,163 @@ private fun StateView(icon: String, text: String, retry: Boolean, onRetry: () ->
 // MARK: - Satır
 
 @Composable
-private fun NotificationRow(item: APINotification) {
-    val style = NotificationStyle(item.type)
+private fun BildirimSatiri(item: APINotification, onClick: () -> Unit) {
+    val stil = bildirimStili(item.type)
+    // Metinler satır değişmedikçe yeniden kurulmaz (kaydırmada iş yok).
+    val baslik = remember(item) { BildirimMetni.baslik(item) }
+    val konu = remember(item) { BildirimMetni.konu(item) }
+    val altMetin = remember(item) { BildirimMetni.altMetin(item) }
+    val zaman = remember(item.lastEventAt, item.createdAt) { goreliZaman(item) }
+    val okunmadi = item.isUnread
     Row(
         Modifier
             .fillMaxWidth()
-            .alpha(if (item.isUnread) 1f else 0.85f)
+            .alpha(if (okunmadi) 1f else 0.85f)
             .glassCard(14.dp)
+            .plainClickable(onClick = onClick)
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        IconTile(icon = style.icon, tone = IconTone.Metal, size = IconTileSize.Sm, iconTint = style.color)
+        StilIkonu(stil)
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth()) {
                 Text(
-                    notificationTitle(item),
+                    baslik,
                     Modifier.weight(1f).alignByBaseline(),
-                    style = sys(15, if (item.isUnread) FontWeight.SemiBold else FontWeight.Medium),
+                    style = sys(15, if (okunmadi) FontWeight.SemiBold else FontWeight.Medium),
                     color = DS.Colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(relativeTime(item), Modifier.alignByBaseline(), style = sys(12), color = DS.Colors.outline, maxLines = 1)
+                Text(zaman, Modifier.alignByBaseline(), style = sys(12), color = DS.Colors.outline, maxLines = 1)
             }
-            notificationSubject(item)?.let { subject ->
+            konu?.let {
                 Text(
-                    subject, style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface.copy(alpha = 0.85f),
+                    it, style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface.copy(alpha = 0.85f),
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
-            notificationBody(item)?.let { body ->
-                Text(body, style = sys(13), color = DS.Colors.onSurfaceVariant)
-            }
+            altMetin?.let { Text(it, style = sys(13), color = DS.Colors.onSurfaceVariant) }
         }
 
-        if (item.isUnread) {
-            Box(Modifier.padding(top = 6.dp).size(7.dp).clip(CircleShape).background(DS.Colors.cyan400))
+        if (okunmadi) {
+            Box(Modifier.padding(top = 6.dp).size(7.dp).background(DS.Colors.cyan400, CircleShape))
         }
     }
 }
 
-// web `notifications.types.*` metinleri
-private fun notificationTitle(item: APINotification): String {
-    val base = when (item.type) {
-        "appointment.arrived" -> "Hasta geldi"
-        "ai.permissionDenied" -> "Yetki dışı asistan sorusu"
-        "task.assigned" -> "Size görev atandı"
-        "task.unassigned" -> "Sorumlusuz yeni görev"
-        "task.due" -> "Görevin vakti geldi"
-        "task.completed" -> "Atadığınız görev tamamlandı"
-        "survey.lowScore" -> "Düşük anket puanı"
-        "credits.low" -> "Kredi bakiyesi azaldı"
-        "credits.limitReached" -> "Kredi limiti doldu"
-        else -> "Bildirim"
-    }
-    val n = item.count
-    if (n != null && n > 1) return "$base ($n)"
-    return base
-}
-
-/** Kimin / neyin hakkında (hasta, görev, kişi). */
-private fun notificationSubject(item: APINotification): String? {
-    if (item.type.startsWith("task.")) {
-        val t = item.task?.title
-        if (!t.isNullOrEmpty()) return t
-    }
-    if (item.type == "ai.permissionDenied") return Unvan.dt(item.actorName ?: "Silinmiş kullanıcı")
-    if (item.patientMasked == true) return "Randevulu hasta"
-    item.patient?.let { p ->
-        if (p.archived == true) return "Arşivlenmiş hasta"
-        return p.name
-    }
-    return null
-}
-
-private fun notificationBody(item: APINotification): String? {
-    fun param(key: String): String? = item.param(key)?.display
-    return when (item.type) {
-        "appointment.arrived" -> param("saat")?.let { "$it randevusu" }
-        "ai.permissionDenied" -> "Yetkisi olmayan bir veri sordu."
-        "task.assigned" -> if (item.task == null) "Görev sorumlusu olarak siz atandınız." else null
-        "task.unassigned" -> "Bu görevin sorumlusu henüz atanmadı."
-        "task.due" -> "Görevin vadesi doldu."
-        "task.completed" -> "Görev sorumlusu tarafından tamamlandı."
-        "survey.lowScore" -> {
-            val q = item.survey?.question
-            val score = param("puan")
-            if (q != null && score != null) "“$q” sorusuna $score puan" else score?.let { "$it puan verildi" }
+/** Tür ikonu: web setinde karşılığı olan ad `IconTile` ile; olmayan (iOS'ta SF Symbol kalanlar) Material çizimle. */
+@Composable
+private fun StilIkonu(stil: BildirimStili) {
+    val vektor = stil.vektor
+    if (vektor == null) {
+        IconTile(icon = stil.ikon, tone = IconTone.Metal, size = IconTileSize.Sm, iconTint = stil.renk)
+    } else {
+        Box(Modifier.size(IconTileSize.Sm.box), contentAlignment = Alignment.Center) {
+            Icon(vektor, contentDescription = null, modifier = Modifier.size(IconTileSize.Sm.icon), tint = stil.renk)
         }
-        "credits.low" -> param("kalan")?.let { "Kliniğin kullanılabilir kredisi $it krediye düştü." }
-        "credits.limitReached" -> {
-            val u = param("kullanilan")
-            val l = param("limit")
-            if (u != null && l != null) "Aylık kredi limitine ulaşıldı ($u / $l kredi); işlem yapılmadı."
-            else "Aylık kredi limitine ulaşıldı; işlem yapılmadı."
-        }
-        else -> null
     }
 }
 
-private fun relativeTime(item: APINotification): String {
-    val raw = item.lastEventAt ?: item.createdAt ?: return ""
-    val date = parseIso(raw) ?: return ""
-    val s = maxOf(0L, Duration.between(date, Instant.now()).seconds)
-    if (s < 60) return "az önce"
-    if (s < 3600) return "${s / 60} dk önce"
-    if (s < 86_400) return "${s / 3600} sa önce"
-    return "${s / 86_400} gün önce"
+private fun goreliZaman(item: APINotification): String {
+    val ham = item.lastEventAt ?: item.createdAt ?: return ""
+    val tarih = isoCoz(ham) ?: return ""
+    val s = maxOf(0L, Duration.between(tarih, Instant.now()).seconds)
+    return when {
+        s < 60 -> "az önce"
+        s < 3600 -> "${s / 60} dk önce"
+        s < 86_400 -> "${s / 3600} sa önce"
+        else -> "${s / 86_400} gün önce"
+    }
 }
 
-private fun parseIso(s: String): Instant? =
+private fun isoCoz(s: String): Instant? =
     runCatching { Instant.parse(s) }.getOrNull() ?: runCatching { OffsetDateTime.parse(s).toInstant() }.getOrNull()
 
-private class NotificationStyle(type: String) {
-    val icon: String
-    val color: Color
+/** Tür ikonları (DESIGN.md metal ton + durum rengi; emoji yok) — web `turler.data.json` ikonlarının karşılığı. */
+private class BildirimStili(val ikon: String, val renk: Color, val vektor: ImageVector? = null)
 
-    init {
-        val (i, c) = when (type) {
-            "appointment.arrived" -> "person.crop.circle.badge.checkmark" to DS.Colors.success
-            "ai.permissionDenied" -> "exclamationmark.shield" to DS.Colors.warning
-            "task.assigned" -> "checklist" to DS.Colors.cyan400
-            "task.unassigned" -> "list.clipboard" to DS.Colors.cyan400
-            "task.due" -> "alarm" to DS.Colors.warning
-            "task.completed" -> "checkmark.circle" to DS.Colors.success
-            "survey.lowScore" -> "hand.thumbsdown" to DS.Colors.danger
-            "credits.low" -> "creditcard" to DS.Colors.warning
-            "credits.limitReached" -> "gauge.with.dots.needle.67percent" to DS.Colors.danger
-            else -> "bell" to DS.Colors.metal
-        }
-        icon = i
-        color = c
-    }
+private val STILLER: Map<String, BildirimStili> by lazy {
+    mapOf(
+        "appointment.created" to BildirimStili("calendar.badge.plus", DS.Colors.cyan400),
+        "appointment.arrived" to BildirimStili("person.crop.circle.badge.checkmark", DS.Colors.success),
+        // iOS "door.left.hand.open" — web setinde yok.
+        "appointment.inTreatment" to BildirimStili("door.left.hand.open", DS.Colors.cyan400, Icons.Outlined.MeetingRoom),
+        "appointment.completed" to BildirimStili("rectangle.portrait.and.arrow.right", DS.Colors.metal),
+        // iOS "calendar.badge.minus" — web setinde yok.
+        "appointment.cancelled" to BildirimStili("calendar.badge.minus", DS.Colors.warning, Icons.Outlined.EventBusy),
+        // iOS "wallet.bifold" → web "Wallet".
+        "payment.received" to BildirimStili("Wallet", DS.Colors.success),
+        "ai.permissionDenied" to BildirimStili("exclamationmark.shield", DS.Colors.warning),
+        "task.assigned" to BildirimStili("checklist", DS.Colors.cyan400),
+        "task.unassigned" to BildirimStili("list.clipboard", DS.Colors.cyan400),
+        "task.due" to BildirimStili("alarm", DS.Colors.warning),
+        "task.completed" to BildirimStili("checkmark.circle", DS.Colors.success),
+        "survey.lowScore" to BildirimStili("hand.thumbsdown", DS.Colors.danger),
+        // iOS "percent" — web setinde yok.
+        "pricing.approvalPending" to BildirimStili("percent", DS.Colors.warning, Icons.Outlined.Percent),
+        "pricing.approvalResolved" to BildirimStili("checkmark.seal", DS.Colors.cyan400),
+        "xray.planRejected" to BildirimStili("xmark.circle", DS.Colors.danger),
+        // iOS "checkmark.shield" → web "ShieldCheck".
+        "xray.planApprovalPending" to BildirimStili("ShieldCheck", DS.Colors.warning),
+        "xray.planApproved" to BildirimStili("checkmark.circle", DS.Colors.success),
+        "credits.low" to BildirimStili("creditcard", DS.Colors.warning),
+        "credits.limitReached" to BildirimStili("gauge.with.dots.needle.67percent", DS.Colors.danger),
+    )
+}
+
+private val VARSAYILAN_STIL by lazy { BildirimStili("bell", DS.Colors.metal) }
+
+private fun bildirimStili(type: String): BildirimStili = STILLER[type] ?: VARSAYILAN_STIL
+
+// MARK: - Önizleme
+
+private fun ornekBildirimler(): List<APINotification> {
+    val simdi = Instant.now()
+    return listOf(
+        APINotification(
+            id = "n1", type = "appointment.arrived", params = mapOf("saat" to JsonPrimitive("14:30"), "oda" to JsonPrimitive("Oda 2")),
+            patient = APINotification.Patient(name = "Mehmet Kaya"), createdAt = simdi.minusSeconds(240).toString(),
+        ),
+        APINotification(
+            id = "n2", type = "task.assigned", task = APINotification.TaskRef(title = "Laboratuvar ölçüsünü gönder"),
+            createdAt = simdi.minusSeconds(7200).toString(),
+        ),
+        APINotification(
+            id = "n3", type = "payment.received", params = mapOf("tutar" to JsonPrimitive(1800), "yontem" to JsonPrimitive("CARD")),
+            patient = APINotification.Patient(name = "Ayşe Yılmaz"), count = 2, createdAt = simdi.minusSeconds(9000).toString(),
+        ),
+        APINotification(
+            id = "n4", type = "xray.planApprovalPending", params = mapOf("kalem" to JsonPrimitive(3)), patientMasked = true,
+            createdAt = simdi.minusSeconds(20_000).toString(),
+        ),
+        APINotification(
+            id = "n5", type = "credits.limitReached", params = mapOf("kullanilan" to JsonPrimitive(480), "limit" to JsonPrimitive(500)),
+            readAt = simdi.toString(), createdAt = simdi.minusSeconds(200_000).toString(),
+        ),
+        // Tanınmayan tür — çizilmez.
+        APINotification(id = "n6", type = "voice.call", createdAt = simdi.toString()),
+    )
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun NotificationsViewPreview() {
-    val now = Instant.now()
-    val sample = listOf(
-        APINotification(
-            id = "n1", type = "appointment.arrived", params = mapOf("saat" to JsonPrimitive("14:30")),
-            patient = APINotification.Patient(name = "Mehmet Kaya"), createdAt = now.minusSeconds(240).toString(),
-        ),
-        APINotification(
-            id = "n2", type = "task.assigned", task = APINotification.TaskRef(title = "Laboratuvar ölçüsünü gönder"),
-            createdAt = now.minusSeconds(7200).toString(),
-        ),
-        APINotification(
-            id = "n3", type = "credits.limitReached", params = mapOf("kullanilan" to JsonPrimitive(480), "limit" to JsonPrimitive(500)),
-            readAt = now.toString(), createdAt = now.minusSeconds(200_000).toString(),
-        ),
-    )
-    remember { NotificationsStore.seedPreview(sample); true }
-    PreviewEnv {
-        NotificationsView(onDismiss = {})
-    }
+    remember { NotificationsStore.onizlemeYukle(ornekBildirimler()); true }
+    PreviewEnv { NotificationsView(onDismiss = {}) }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun NotificationsViewTabletPreview() {
+    remember { NotificationsStore.onizlemeYukle(ornekBildirimler()); true }
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { NotificationsView(onDismiss = {}) }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 120, heightDp = 80)
+@Composable
+private fun ZilDugmesiPreview() {
+    remember { NotificationsStore.onizlemeYukle(ornekBildirimler()); true }
+    PreviewEnv { Box(Modifier.padding(20.dp)) { ZilDugmesi {} } }
 }

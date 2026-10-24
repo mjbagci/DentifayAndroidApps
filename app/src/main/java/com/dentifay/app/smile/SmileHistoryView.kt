@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -32,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,7 +48,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dentifay.app.R
 import com.dentifay.app.theme.DS
@@ -57,19 +62,24 @@ import com.dentifay.app.theme.glassCard
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.pressable
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.LocalPencere
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.max
 
 private val trLocale: Locale = Locale.forLanguageTag("tr-TR")
 
+/** Biçimleyiciler bir kez kurulur (ızgaradaki her karo için yeniden ayrıştırılmaz). */
+private val kisaTarih: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM yyyy HH:mm", trLocale)
+private val uzunTarih: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy HH:mm", trLocale)
+
 /** `createdAt.formatted(.dateTime.day().month(...).year().hour().minute())` (tr_TR). */
 internal fun smileDateText(date: Instant, wideMonth: Boolean): String =
-    DateTimeFormatter.ofPattern(if (wideMonth) "d MMMM yyyy HH:mm" else "d MMM yyyy HH:mm", trLocale)
-        .withZone(ZoneId.systemDefault())
-        .format(date)
+    (if (wideMonth) uzunTarih else kisaTarih).withZone(ZoneId.systemDefault()).format(date)
 
 /**
  * Kaydedilen gülüş simülasyonları (Geçmiş). Hasta onayıyla kaydedilen her
@@ -105,13 +115,14 @@ fun SmileHistoryView(onDismiss: () -> Unit) {
                     HistoryEmptyState()
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        // Telefonda iki sütun (Swift), geniş sayfada üç.
+                        columns = GridCells.Adaptive(minSize = 160.dp),
                         contentPadding = PaddingValues(16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(store.items, key = { it.id.toString() }) { item ->
+                        items(store.items, key = { it.id.toString() }, contentType = { "historyTile" }) { item ->
                             HistoryTile(item, Modifier.plainClickable { selected = item })
                         }
                     }
@@ -141,11 +152,13 @@ private fun HistoryEmptyState() {
 @Composable
 private fun HistoryTile(item: SmileHistoryItem, modifier: Modifier = Modifier) {
     val store = SmileHistoryStore.shared
-    val thumb = remember(item.id) { store.thumbnail(item) }
+    // Küçük önizleme arka planda çözülür (ızgara kaydırılırken takılma yok).
+    val thumb by produceState<Bitmap?>(null, item.id) { value = store.loadThumbnail(item) }
     Column(modifier.glassCard(18.dp).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.fillMaxWidth().height(118.dp).clip(RoundedCornerShape(14.dp))) {
-            if (thumb != null) {
-                Image(remember(thumb) { thumb.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            val t = thumb
+            if (t != null) {
+                Image(remember(t) { t.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
                 Box(Modifier.fillMaxSize().background(DS.Colors.surfaceContainer))
             }
@@ -161,9 +174,12 @@ private fun HistoryTile(item: SmileHistoryItem, modifier: Modifier = Modifier) {
                 ) { DfyIcon("folder.fill.badge.person.crop", size = 11.dp, tint = Color.White) }
             }
         }
-        Text(item.displayName, style = sys(13, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1)
-        Text("${item.designTitle} · ${item.tierTitle}", style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 1)
-        Text(smileDateText(item.createdAt, wideMonth = false), style = sys(10), color = DS.Colors.outline)
+        Text(item.displayName, style = sys(13, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            "${item.designTitle} · ${item.tierTitle}", style = sys(11), color = DS.Colors.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Text(smileDateText(item.createdAt, wideMonth = false), style = sys(10), color = DS.Colors.outline, maxLines = 1)
     }
 }
 
@@ -188,6 +204,8 @@ fun SmileHistoryDetailView(item: SmileHistoryItem, onBack: () -> Unit) {
         } else loadFailed = true
     }
 
+    // Görsel alanı pencereye sığar (yatay tablette sayfa yüksekliği sınırlı).
+    val gorselMax = LocalPencere.current.yukseklik * 0.55f
     Column(Modifier.fillMaxSize().background(DS.Colors.background)) {
         SmileInlineNavBar(item.displayName, leading = { SmileBackButton("Geçmiş", onBack) }, trailingText = null)
         Column(
@@ -196,29 +214,30 @@ fun SmileHistoryDetailView(item: SmileHistoryItem, onBack: () -> Unit) {
         ) {
             val imgs = images
             if (imgs != null) {
-                val pair = remember(imgs, zoomed) {
-                    if (!zoomed) imgs else {
-                        val b = imgs.first.croppedTo(item.zoomRect)
-                        val a = imgs.second.croppedTo(item.zoomRect)
-                        if (b != null && a != null) b to a else imgs
-                    }
-                }
+                // Ekran kopyaları (kırpım + küçültme) arka planda; tam çözünürlük paylaşım için `images`ta kalır.
+                val pair = rememberSmileDisplayPair(imgs.first, imgs.second, if (zoomed) item.zoomRect else null)
                 SmileSegmented(
                     options = if (item.zoomRect != null) listOf(false, true) else listOf(false),
                     selected = zoomed, onSelect = { zoomed = it }, modifier = Modifier.fillMaxWidth(),
                     label = { if (it) "Gülüş" else "Tam fotoğraf" }, animationMs = 200,
                 )
 
-                Crossfade(sliderMode, animationSpec = Motion.easeInOut(200), label = "historyMode") { slider ->
-                    if (slider) {
-                        // `.id(zoomed)`: görünüm değişince ipucu yeniden oynar.
-                        androidx.compose.runtime.key(zoomed) {
-                            BeforeAfterSlider(pair.first, pair.second, Modifier.fillMaxWidth())
-                        }
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            HistoryCompareTile(pair.first, "ÖNCE", Modifier.weight(1f))
-                            HistoryCompareTile(pair.second, "SONRA", Modifier.weight(1f))
+                if (pair == null) {
+                    Box(Modifier.fillMaxWidth().height(280.dp), contentAlignment = Alignment.Center) { SmileSpinner() }
+                } else {
+                    Crossfade(sliderMode, animationSpec = Motion.easeInOut(200), label = "historyMode") { slider ->
+                        if (slider) {
+                            // `.id(zoomed)`: görünüm (yeni kırpım) değişince ipucu yeniden oynar.
+                            androidx.compose.runtime.key(pair) {
+                                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    BeforeAfterSlider(pair.first, pair.second, Modifier.heightIn(max = gorselMax))
+                                }
+                            }
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                HistoryCompareTile(pair.first, "ÖNCE", gorselMax, Modifier.weight(1f))
+                                HistoryCompareTile(pair.second, "SONRA", gorselMax, Modifier.weight(1f))
+                            }
                         }
                     }
                 }
@@ -266,7 +285,7 @@ fun SmileHistoryDetailView(item: SmileHistoryItem, onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 DfyIcon("paperplane.fill", size = 15.dp, tint = Color.White)
-                Text("Hastaya Gönder", style = sys(15, FontWeight.Bold), color = Color.White)
+                Text("Hastaya Gönder", style = sys(15, FontWeight.Bold), color = Color.White, maxLines = 1)
             }
 
             Row(
@@ -314,23 +333,28 @@ fun SmileHistoryDetailView(item: SmileHistoryItem, onBack: () -> Unit) {
     )
 }
 
+/** Yan yana karo: oran korunur, `maxHeight`i aşarsa küçülür (dikey yüz fotoğrafı yatay pencereden taşmasın). */
 @Composable
-private fun HistoryCompareTile(image: Bitmap, label: String, modifier: Modifier = Modifier) {
-    Box(modifier.clip(RoundedCornerShape(14.dp))) {
-        Image(
-            remember(image) { image.asImageBitmap() }, null,
-            Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth,
-        )
-        Text(
-            label,
+private fun HistoryCompareTile(image: Bitmap, label: String, maxHeight: Dp, modifier: Modifier = Modifier) {
+    Box(modifier, contentAlignment = Alignment.TopCenter) {
+        Box(
             Modifier
-                .align(Alignment.BottomStart)
-                .padding(8.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.55f))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            style = sys(10, FontWeight.Bold, tracking = 1), color = Color.White,
-        )
+                .heightIn(max = maxHeight)
+                .aspectRatio(image.width.toFloat() / max(image.height, 1).toFloat())
+                .clip(RoundedCornerShape(14.dp))
+        ) {
+            Image(remember(image) { image.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+            Text(
+                label,
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(8.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                style = sys(10, FontWeight.Bold, tracking = 1), color = Color.White, maxLines = 1,
+            )
+        }
     }
 }
 
@@ -340,7 +364,7 @@ private fun HistoryInfoRow(icon: String, text: String) {
         Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
             DfyIcon(icon, size = 13.dp, tint = DS.Colors.cyan400)
         }
-        Text(text, style = sys(13), color = DS.Colors.onSurface)
+        Text(text, Modifier.weight(1f), style = sys(13), color = DS.Colors.onSurface)
     }
 }
 
@@ -348,6 +372,13 @@ private fun HistoryInfoRow(icon: String, text: String) {
 @Composable
 private fun SmileHistoryViewPreview() {
     PreviewEnv { SmileHistoryView(onDismiss = {}) }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 640, heightDp = 800)
+@Composable
+private fun SmileHistoryViewTabletPreview() {
+    // Sayfa tablette 640 dp genişlikte ortalanır (DfySheet).
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { SmileHistoryView(onDismiss = {}) }
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
@@ -368,8 +399,8 @@ private fun HistoryCompareTilePreview() {
         val b = rememberSampleBitmap(R.drawable.smile_before)
         val a = rememberSampleBitmap(R.drawable.smile_after)
         Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HistoryCompareTile(b, "ÖNCE", Modifier.weight(1f))
-            HistoryCompareTile(a, "SONRA", Modifier.weight(1f))
+            HistoryCompareTile(b, "ÖNCE", 360.dp, Modifier.weight(1f))
+            HistoryCompareTile(a, "SONRA", 360.dp, Modifier.weight(1f))
         }
     }
 }

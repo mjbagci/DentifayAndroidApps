@@ -1,11 +1,8 @@
 package com.dentifay.app.theme
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -42,6 +39,9 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -71,6 +71,7 @@ import com.dentifay.app.R
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.delay
 
 // SwiftUI `Color(hex:)` karşılığı.
 fun hex(hex: String): Color {
@@ -455,28 +456,53 @@ fun PageHeader(
     }
 }
 
-/** Web `sig-shimmer-text`: cyan → mor → beyaz → mor → cyan gradyanlı başlık, 16 sn'de bir kayar. */
+/**
+ * Web `sig-shimmer-text`: cyan → mor → beyaz → mor → cyan gradyanlı başlık, web hızında (16 sn'de bir tur) kayar.
+ * Performans: kayma yalnız ÇİZİM aşamasında okunur (yeniden oluşturma/ölçüm yok); metin bir kez yerleşir. Sürekli akış
+ * başlık görünürken pencereyi her karede yeniden çizdiriyordu (boşta bile saniyede 60+ kare); bunun yerine sayfa açılınca
+ * çeyrek tur akar, sonra durur ve [SHIMMER_ARA] sonra devam eder — arada hiç kare üretilmez.
+ */
 @Composable
 fun ShimmerText(text: String, modifier: Modifier = Modifier, size: Float = 30f, weight: FontWeight = FontWeight.Bold) {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val phase by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(16000, easing = LinearEasing), RepeatMode.Restart), label = "phase")
-    val colors = listOf(
-        DS.Colors.cyan400, DS.Colors.purple500, Color.White, DS.Colors.purple500, DS.Colors.cyan400,
-        DS.Colors.purple500, Color.White, DS.Colors.purple500, DS.Colors.cyan400,
-    )
-    val stops = listOf(0f, 0.14f, 0.25f, 0.36f, 0.5f, 0.64f, 0.75f, 0.86f, 1f)
-    val brush = remember(phase) {
-        object : ShaderBrush() {
-            override fun createShader(size: Size): Shader {
-                val w = max(size.width, 1f)
-                return LinearGradientShader(Offset(-w * phase, 0f), Offset(-w * phase + 2 * w, 0f), colors, stops, TileMode.Clamp)
-            }
+    val phase = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            phase.animateTo(phase.value + 0.25f, tween(4000, easing = LinearEasing))
+            // Desen genişlik başına bir kez tekrar eder: 1 ile 0 aynı görünür, sarma dikişsizdir.
+            if (phase.value >= 1f) phase.snapTo(phase.value - 1f)
+            delay(SHIMMER_ARA)
         }
     }
     Text(
-        text, modifier,
-        style = sys(size, weight, tracking = -0.5).copy(brush = brush),
+        text,
+        modifier
+            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+            .drawWithContent {
+                drawContent()
+                val w = max(this.size.width, 1f)
+                val x = -w * phase.value
+                drawRect(
+                    brush = Brush.linearGradient(
+                        *SHIMMER_DURAKLARI, start = Offset(x, 0f), end = Offset(x + 2 * w, 0f), tileMode = TileMode.Clamp,
+                    ),
+                    blendMode = BlendMode.SrcIn,
+                )
+            },
+        style = sys(size, weight, tracking = -0.5),
+        color = Color.White,
         maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** Parıltı akışları arasındaki dinlenme (ms). */
+private const val SHIMMER_ARA = 20_000L
+
+// Tembel: `DS.Colors` kurulurken bu dosyanın `hex()`ini çağırır; düz bir üst düzey değer o anda yarım kurulu
+// `DS.Colors`ten okur ve camgöbeği/mor duraklar SAYDAM kalırdı (başlıkta yalnız beyaz bant görünüyordu).
+private val SHIMMER_DURAKLARI: Array<Pair<Float, Color>> by lazy(LazyThreadSafetyMode.NONE) {
+    arrayOf(
+        0f to DS.Colors.cyan400, 0.14f to DS.Colors.purple500, 0.25f to Color.White, 0.36f to DS.Colors.purple500,
+        0.5f to DS.Colors.cyan400, 0.64f to DS.Colors.purple500, 0.75f to Color.White, 0.86f to DS.Colors.purple500, 1f to DS.Colors.cyan400,
     )
 }
 

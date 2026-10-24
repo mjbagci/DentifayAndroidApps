@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/ListFilter.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 3 7 h 3 M 3 17 h 6 m 9 0 h 3 M 15 7 h 6"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 6 7 c 0 -.932 0 -1.398 .152 -1.765 a 2 2 0 0 1 1.083 -1.083 C 7.602 4 8.068 4 9 4 s 1.398 0 1.765 .152 a 2 2 0 0 1 1.083 1.083 C 12 5.602 12 6.068 12 7 s 0 1.398 -.152 1.765 a 2 2 0 0 1 -1.083 1.083 C 10.398 10 9.932 10 9 10 s -1.398 0 -1.765 -.152 a 2 2 0 0 1 -1.083 -1.083 C 6 8.398 6 7.932 6 7 Z m 6 10 c 0 -.932 0 -1.398 .152 -1.765 a 2 2 0 0 1 1.083 -1.083 C 13.602 14 14.068 14 15 14 s 1.398 0 1.765 .152 a 2 2 0 0 1 1.083 1.083 C 18 15.602 18 16.068 18 17 s 0 1.398 -.152 1.765 a 2 2 0 0 1 -1.083 1.083 C 16.398 20 15.932 20 15 20 s -1.398 0 -1.765 -.152 a 2 2 0 0 1 -1.083 -1.083 C 12 18.398 12 17.932 12 17 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5" />
+</vector>

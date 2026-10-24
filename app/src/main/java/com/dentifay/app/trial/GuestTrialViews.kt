@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -170,21 +171,26 @@ private fun QuotaRow(f: GuestTrialFeature) {
         Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
             DfyIcon(if (f == GuestTrialFeature.xray) "rectangle.split.3x1" else "mouth", size = 15.dp, tint = DS.Colors.metal)
         }
-        Text(f.title, style = sys(15, FontWeight.Medium), color = DS.Colors.onSurface)
-        Spacer(Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            repeat(limit) { i ->
-                Box(
-                    Modifier
-                        .size(width = 10.dp, height = 5.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(if (i < remaining) DS.Colors.cyan400 else Color.White.copy(alpha = 0.12f))
-                )
+        // Dar telefonda / büyük yazıda başlık kısalır; noktalar ve sayı hep görünür.
+        Text(
+            f.title, Modifier.weight(1f), style = sys(15, FontWeight.Medium), color = DS.Colors.onSurface,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        if (limit <= 10) {   // büyük limitte (geliştirici cihazı) nokta dizisi taşmasın
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                repeat(limit) { i ->
+                    Box(
+                        Modifier
+                            .size(width = 10.dp, height = 5.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(if (i < remaining) DS.Colors.cyan400 else Color.White.copy(alpha = 0.12f))
+                    )
+                }
             }
         }
         Text(
             "$remaining/$limit", style = sys(13, FontWeight.SemiBold).monoDigits(),
-            color = if (remaining == 0) DS.Colors.warning else DS.Colors.onSurface,
+            color = if (remaining == 0) DS.Colors.warning else DS.Colors.onSurface, maxLines = 1,
         )
     }
 }

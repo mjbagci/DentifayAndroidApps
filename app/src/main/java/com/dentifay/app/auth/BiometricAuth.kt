@@ -53,7 +53,7 @@ object BiometricAuth {
     }
 }
 
-/** E-posta + parolayı yalnızca bu cihazda, şifreli depoda saklar (Keychain karşılığı). */
+/** Giriş kimliği + parolayı yalnızca bu cihazda, şifreli depoda saklar (Keychain karşılığı). */
 object BiometricCredentialStore {
     private const val FILE = "com.dentifay.biometric"
     private const val KEY = "login"

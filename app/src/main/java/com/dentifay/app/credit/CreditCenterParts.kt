@@ -4,18 +4,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -30,29 +29,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
-import com.dentifay.app.core.Unvan
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.DfyIcon
 import com.dentifay.app.theme.glassCard
 import com.dentifay.app.theme.hex
 import com.dentifay.app.theme.monoDigits
-import com.dentifay.app.theme.mutedHex
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.pressable
 import com.dentifay.app.theme.sys
 import com.dentifay.app.theme.upperTr
-import java.time.ZoneId
-import kotlin.math.abs
+import com.dentifay.app.ui.YetkiliButon
+import com.dentifay.app.ui.YetkiliEylem
+import com.dentifay.app.ui.yetkiliMi
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 // MARK: - Renk paleti (web'deki grafik paletiyle AYNI sıra: özellikler kredi azalan sırayla boyanır)
 
@@ -68,22 +73,22 @@ internal object CreditPalette {
 // MARK: - Ortak parçalar
 
 @Composable
-internal fun CcSectionHeader(text: String) {
-    Text(text, style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
+internal fun CcSectionHeader(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier, style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
 }
 
 @Composable
-internal fun CcFootnote(text: String) {
-    Text(text, style = sys(11), color = DS.Colors.onSurfaceVariant)
+internal fun CcFootnote(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier, style = sys(11), color = DS.Colors.onSurfaceVariant)
 }
 
 @Composable
 internal fun CcEmptyNote(text: String) {
     Box(
-        Modifier.fillMaxWidth().glassCard(18.dp).padding(vertical = 28.dp),
+        Modifier.fillMaxWidth().glassCard(18.dp).padding(horizontal = 16.dp, vertical = 28.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = sys(13), color = DS.Colors.onSurfaceVariant)
+        Text(text, style = sys(13), color = DS.Colors.onSurfaceVariant, textAlign = TextAlign.Center)
     }
 }
 
@@ -99,16 +104,20 @@ internal fun CcFilterChip(icon: String, text: String, active: Boolean, modifier:
     val tint = if (active) DS.Colors.cyan400 else DS.Colors.onSurfaceVariant
     Row(
         modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(50))
-            .background(if (active) DS.Colors.cyan400.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.06f))
-            .border(1.dp, if (active) DS.Colors.cyan400.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.1f), RoundedCornerShape(50))
-            .padding(horizontal = 12.dp),
+            .heightIn(min = 34.dp)
+            .hapZemin(
+                if (active) DS.Colors.cyan400.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.06f),
+                if (active) DS.Colors.cyan400.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.1f),
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         DfyIcon(icon, size = 11.dp, tint = tint)
-        Text(text, style = sys(13, FontWeight.SemiBold), color = tint, maxLines = 1)
+        Text(
+            text, Modifier.widthIn(max = 240.dp),
+            style = sys(13, FontWeight.SemiBold), color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
         DfyIcon("chevron.down", Modifier.alpha(0.7f), size = 9.dp, tint = tint)
     }
 }
@@ -118,10 +127,10 @@ internal data class CcMenuItem(val title: String, val checked: Boolean = false, 
 
 /** `Menu { … } label: { FilterChip(…) }` */
 @Composable
-internal fun CcMenu(items: List<CcMenuItem>, label: @Composable () -> Unit) {
+internal fun CcMenu(items: List<CcMenuItem>, modifier: Modifier = Modifier, label: @Composable () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        Box(Modifier.plainClickable { expanded = true }) { label() }
+    Box(modifier) {
+        Box(Modifier.semantics { role = Role.DropdownList }.plainClickable { expanded = true }) { label() }
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
@@ -130,7 +139,7 @@ internal fun CcMenu(items: List<CcMenuItem>, label: @Composable () -> Unit) {
         ) {
             items.forEach { item ->
                 DropdownMenuItem(
-                    text = { Text(item.title, style = sys(16), color = DS.Colors.onSurface) },
+                    text = { Text(item.title, style = sys(16), color = DS.Colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     onClick = {
                         expanded = false
                         item.action()
@@ -142,10 +151,11 @@ internal fun CcMenu(items: List<CcMenuItem>, label: @Composable () -> Unit) {
     }
 }
 
+/** `Card(title:subtitle:)` — başlık, isteğe bağlı alt başlık, içerik; cam kart. */
 @Composable
-internal fun CcCard(title: String, subtitle: String?, content: @Composable ColumnScope.() -> Unit) {
+internal fun CcCard(title: String, subtitle: String?, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp),
+        modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -173,7 +183,11 @@ internal fun CcBanner(icon: String, tint: Color, text: String, actionTitle: Stri
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text, style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface)
             if (actionTitle != null && action != null) {
-                Text(actionTitle, Modifier.plainClickable(onClick = action), style = sys(13, FontWeight.SemiBold), color = tint)
+                Text(
+                    actionTitle,
+                    Modifier.semantics { role = Role.Button }.plainClickable(onClick = action),
+                    style = sys(13, FontWeight.SemiBold), color = tint,
+                )
             }
         }
     }
@@ -190,7 +204,8 @@ internal fun CcErrorCard(title: String, text: String, retry: () -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .heightIn(min = 42.dp)
+                .semantics { role = Role.Button }
                 .pressable(onClick = retry)
                 .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50)),
             contentAlignment = Alignment.Center,
@@ -200,95 +215,105 @@ internal fun CcErrorCard(title: String, text: String, retry: () -> Unit) {
     }
 }
 
-// MARK: - Özet parçaları
-
+/** "Daha fazla göster" metin düğmesi. */
 @Composable
-internal fun CcKpiGrid(usage: CreditUsage) {
-    val w = usage.wallet
-    val s = usage.summary
+internal fun CcMoreButton(onClick: () -> Unit) {
+    Text(
+        "Daha fazla göster",
+        Modifier.semantics { role = Role.Button }.plainClickable(onClick = onClick).padding(vertical = 6.dp),
+        style = sys(13, FontWeight.SemiBold), color = DS.Colors.cyan400,
+    )
+}
+
+// MARK: - Genel Bakış parçaları
+
+/** Dört gösterge — telefonda 2, geniş pencerede 4 sütun; satırdaki kutular eşit yükseklikte. */
+@Composable
+internal fun CcKpiGrid(wallet: SmileWallet, analysis: CreditAnalysis?, sutun: Int) {
+    val s = analysis?.summary
     // 7 günden az kırmızı, 30'dan az turuncu (web `yeterlilikTonu` ile aynı eşikler).
-    val runwayTint = when (val d = usage.runwayDays) {
+    val runwayTint = when (val d = analysis?.runwayDays) {
         null -> DS.Colors.slate400
         else -> if (d < 7) DS.Colors.error else if (d < 30) DS.Colors.orange400 else DS.Colors.tertiaryContainer
     }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-            CcKpi(
-                "creditcard.fill", DS.Colors.cyan400, "Kullanılabilir kredi", creditText(w.availableCredits),
-                "Ücretsiz ${creditText(w.freeRemainingCredits)} · satın alınmış ${creditText(w.balanceCredits)}",
-                Modifier.weight(1f),
-            )
-            CcKpi(
-                "chart.bar.fill", DS.Colors.accentViolet, "Dönemde kullanılan", creditText(s.usedCredits),
-                "${s.operations} işlem · iade ${creditText(s.refundedCredits)}",
-                Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-            CcKpi(
-                "hourglass", runwayTint, "Tahmini yeterlilik", usage.runwayDays?.let { "$it gün" } ?: "—",
-                if (usage.last30DaysCredits > 0)
-                    "Son 30 gün ortalaması günde ${creditText((usage.last30DaysCredits / 30 * 10).roundToInt() / 10.0)} kredi"
-                else "Son 30 günde kullanım yok",
-                Modifier.weight(1f),
-            )
-            CcKpi(
-                "arrow.down.circle.fill", DS.Colors.tertiaryContainer, "Dönemde yüklenen", creditText(s.purchasedCredits),
-                if (s.purchases > 0) "${s.purchases} satın alma · ${SmileCreditFormat.lira(s.paidTL)}" else "Bu dönemde satın alma yok",
-                Modifier.weight(1f),
-            )
-        }
-    }
+    val last30 = analysis?.last30DaysCredits ?: 0.0
+    val kutular = listOf(
+        KpiVeri(
+            "creditcard.fill", DS.Colors.cyan400, "Kullanılabilir kredi", creditText(wallet.availableCredits),
+            "Ücretsiz ${creditText(wallet.freeRemainingCredits)} · satın alınmış ${creditText(wallet.balanceCredits)}",
+        ),
+        KpiVeri(
+            "chart.bar.fill", DS.Colors.accentViolet, "Dönemde kullanılan", s?.let { creditText(it.usedCredits) } ?: "—",
+            s?.let { "${it.operations} işlem · iade ${creditText(it.refundedCredits)}" } ?: "",
+        ),
+        KpiVeri(
+            "hourglass", runwayTint, "Kaç gün yeter", analysis?.runwayDays?.let { "$it gün" } ?: "—",
+            if (last30 > 0) "Son 30 günde ${creditText(last30)} kredi kullanıldı" else "Son 30 günde kullanım yok",
+        ),
+        KpiVeri("arrow.down.circle.fill", DS.Colors.tertiaryContainer, "Dönemde satın alınan", s?.let { creditText(it.purchasedCredits) } ?: "—", purchasedDetail(s)),
+    )
+    EsitIzgara(kutular, sutun) { k, mod -> CcKpi(k, mod) }
+}
+
+internal class KpiVeri(val icon: String, val tint: Color, val title: String, val value: String, val detail: String)
+
+/** TL yalnız sunucu verirse (`paidTL`); yoksa yalnız adet. */
+private fun purchasedDetail(s: CreditAnalysis.Summary?): String {
+    if (s == null || s.purchases <= 0) return "Bu dönemde satın alma yok"
+    val tl = s.paidTL
+    return if (tl != null) "${s.purchases} satın alma · ${SmileCreditFormat.lira(tl)}" else "${s.purchases} satın alma"
 }
 
 @Composable
-private fun CcKpi(icon: String, tint: Color, title: String, value: String, detail: String, modifier: Modifier = Modifier) {
+private fun CcKpi(k: KpiVeri, modifier: Modifier = Modifier) {
     Column(
         modifier
             .heightIn(min = 112.dp)
             .glassCard(18.dp)
-            .padding(14.dp),
+            .padding(14.dp)
+            .semantics(mergeDescendants = true) {},
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            DfyIcon(icon, size = 12.dp, tint = tint)
-            Text(title, style = sys(11, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            DfyIcon(k.icon, size = 12.dp, tint = k.tint)
+            Text(k.title, style = sys(11, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        CreditNumericText(value, sys(24, FontWeight.Bold).monoDigits(), DS.Colors.onSurface)
-        Text(detail, style = sys(10), color = DS.Colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        CreditNumericText(k.value, sys(24, FontWeight.Bold).monoDigits(), DS.Colors.onSurface, Modifier.fillMaxWidth())
+        Text(k.detail, style = sys(10), color = DS.Colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
-internal fun CcFeatureBreakdown(rows: List<CreditUsage.FeatureRow>, order: List<String>) {
-    val total = rows.sumOf { max(0.0, it.credits) }
+internal fun CcFeatureBreakdown(rows: List<CreditAnalysis.FeatureRow>, order: List<String>) {
     if (rows.isEmpty()) {
-        Text("Bu dönemde kredi kullanımı yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
+        Text("Bu aralıkta kredi kullanımı yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         rows.forEach { r ->
-            val share = if (total > 0) max(0.0, r.credits) / total else 0.0
+            // Pay sunucudan (`share`, %); mobil hesaplamaz.
+            val share = (r.share ?: 0) / 100f
             val color = CreditPalette.color(r.feature, order)
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-                    Text(CreditLabels.feature(r.feature), style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
-                    Spacer(Modifier.weight(1f))
+                    Text(CreditLabels.feature(r.feature), Modifier.weight(1f), style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
                     Text("${creditText(r.credits)} kredi", style = sys(13, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface)
                 }
-                BoxWithConstraints(Modifier.fillMaxWidth().height(5.dp)) {
-                    Box(Modifier.fillMaxWidth().fillMaxHeight().clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.06f)))
-                    Box(
-                        Modifier
-                            .width((maxWidth * share.toFloat()).coerceAtLeast(4.dp))
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(50))
-                            .background(color),
-                    )
-                }
+                // Pay çubuğu — tek çizim (`Capsule` zemin + dolgu, en az 4).
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .drawBehind {
+                            val cr = CornerRadius(size.height / 2)
+                            drawRoundRect(PayZemini, cornerRadius = cr)
+                            val w = max(4.dp.toPx(), size.width * share.coerceIn(0f, 1f))
+                            drawRoundRect(color, size = Size(w, size.height), cornerRadius = cr)
+                        },
+                )
                 Text(
-                    "${r.operations} işlem · %${(share * 100).roundToInt()}" + (if (r.refunds > 0) " · ${r.refunds} iade" else ""),
+                    "${r.operations} işlem · %${r.share ?: 0}" + (if ((r.refunds ?: 0) > 0) " · ${r.refunds ?: 0} iade" else ""),
                     style = sys(11), color = DS.Colors.onSurfaceVariant,
                 )
             }
@@ -296,35 +321,40 @@ internal fun CcFeatureBreakdown(rows: List<CreditUsage.FeatureRow>, order: List<
     }
 }
 
+private val PayZemini = Color.White.copy(alpha = 0.06f)
+
 @Composable
-internal fun CcUserBreakdown(rows: List<CreditUsage.UserRow>, tz: ZoneId, onSelect: (String) -> Unit) {
+internal fun CcUserBreakdown(rows: List<CreditAnalysis.UserRow>, onSelect: (String) -> Unit) {
     if (rows.isEmpty()) {
-        Text("Bu dönemde kredi kullanımı yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
+        Text("Bu aralıkta kredi kullanımı yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
         return
     }
     Column {
         rows.forEachIndexed { i, r ->
-            val selectable = !(r.userId ?: "").isEmpty()
+            val id = r.userId?.takeIf { it.isNotEmpty() }
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .plainClickable(enabled = selectable) { r.userId?.takeIf { it.isNotEmpty() }?.let(onSelect) }
+                    .then(if (id != null) Modifier.semantics { role = Role.Button }.plainClickable { onSelect(id) } else Modifier)
                     .padding(vertical = 9.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(34.dp).clip(CircleShape).background(DS.Colors.cyan400.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                    Text(ccInitials(r.user?.name), style = sys(12, FontWeight.Bold), color = DS.Colors.cyan400)
+                    Text(ccInitials(r.user?.name), style = sys(12, FontWeight.Bold), color = DS.Colors.cyan400, maxLines = 1)
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(r.user?.displayName ?: "Sistem / Dentifay", style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
                     Text(
-                        listOfNotNull(r.user?.departmentLabel, "${r.operations} işlem", r.lastAt?.let { "son: ${CreditDates.short(it, tz)}" }).joinToString(" · "),
+                        r.user?.displayName ?: "Dentifay", style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOfNotNull(r.user?.departmentLabel, "${r.operations} işlem", r.lastAt?.let { "son: ${CreditDates.short(it)}" }).joinToString(" · "),
                         style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Text(creditText(r.credits), style = sys(15, FontWeight.Bold).monoDigits(), color = DS.Colors.onSurface)
-                if (selectable) DfyIcon("chevron.right", size = 11.dp, tint = DS.Colors.slate500)
+                if (id != null) DfyIcon("chevron.right", size = 11.dp, tint = DS.Colors.slate500)
             }
             if (i != rows.lastIndex) CreditDivider()
         }
@@ -338,20 +368,17 @@ private fun ccInitials(name: String?): String {
 }
 
 @Composable
-internal fun CcActionList(rows: List<CreditUsage.ActionRow>) {
+internal fun CcActionList(rows: List<CreditAnalysis.ActionRow>) {
     if (rows.isEmpty()) {
-        Text("Bu dönemde kredi kullanımı yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
+        Text("Bu aralıkta kredi kullanımı yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         rows.forEach { r ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        CreditLabels.action(r.feature, r.action) ?: CreditLabels.feature(r.feature),
-                        style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface,
-                    )
-                    Text("${CreditLabels.feature(r.feature)} · ${r.operations} işlem", style = sys(11), color = DS.Colors.onSurfaceVariant)
+                    Text(CreditLabels.operation(r.feature, r.action), style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
+                    Text("${r.operations} işlem", style = sys(11), color = DS.Colors.onSurfaceVariant)
                 }
                 Text("${creditText(r.credits)} kredi", style = sys(13, FontWeight.SemiBold).monoDigits(), color = DS.Colors.cyan400)
             }
@@ -359,44 +386,157 @@ internal fun CcActionList(rows: List<CreditUsage.ActionRow>) {
     }
 }
 
+/** Aylık döküm — ay `YYYY-AA` → "Ekim 2026"; ₺ yalnız `purchasedTL > 0` iken; durum `durumMetni` kuralıyla. */
+@Composable
+internal fun CcMonthlyList(months: List<CreditUsage.Month>) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        months.forEach { m ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f).alignBy(FirstBaseline), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(CreditDates.monthLabel(m.period), style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
+                    m.durumMetni?.let { d ->
+                        Text(d, style = sys(11), color = if (m.billed) DS.Colors.tertiaryContainer else DS.Colors.onSurfaceVariant)
+                    }
+                }
+                Column(Modifier.alignBy(FirstBaseline), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("${creditText(m.usedCredits)} kredi", style = sys(13, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface)
+                    val tl = m.purchasedTL
+                    if (tl != null && tl > 0) {
+                        Text("Satın alınan paket ${SmileCreditFormat.lira(tl)}", style = sys(11), color = DS.Colors.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** e-Fatura kartı (Ek MO.21r; salt okur — Fatura Ayarları bağlantısı mobilde yok). */
+@Composable
+internal fun CcEDocumentCard(
+    usage: EDocumentUsage?,
+    error: String?,
+    refreshError: String?,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    CcCard("e-Fatura", null, modifier) {
+        if (usage != null) {
+            if (usage.hesap == null) {
+                Text("Aktif bir e-belge hesabınız yok.", style = sys(13), color = DS.Colors.onSurfaceVariant)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    usage.buAy?.let { b ->
+                        Text("Bu ay kesilen belge: ${b.toplam}", style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
+                        Text(
+                            "e-Fatura ${b.turler["EFATURA"] ?: 0} · e-Arşiv ${b.turler["EARSIV"] ?: 0} · e-SMM ${b.turler["ESMM"] ?: 0}",
+                            style = sys(12), color = DS.Colors.onSurfaceVariant,
+                        )
+                    }
+                    usage.kontor?.let { k ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Kalan kontör: ${k.kalan?.let { creditText(it) } ?: "—"}", Modifier.weight(1f),
+                                style = sys(13, FontWeight.SemiBold), color = DS.Colors.onSurface,
+                            )
+                            Text(
+                                "Yenile",
+                                Modifier.semantics { role = Role.Button }.plainClickable(onClick = onRefresh).padding(vertical = 4.dp),
+                                style = sys(13, FontWeight.SemiBold), color = DS.Colors.cyan400,
+                            )
+                        }
+                        k.okumaZamani?.let { z ->
+                            Text("${CreditDates.short(z)} itibarıyla", style = sys(11), color = DS.Colors.outline)
+                        }
+                    }
+                    if (usage.uyari == "KONTOR_AZ") {
+                        Text(
+                            "Kalan kontörünüz son 30 günde kestiğiniz belge sayısından az. e-Belge firmanızdan kontör yükleyin.",
+                            style = sys(12), color = DS.Colors.orange400,
+                        )
+                    }
+                    if (refreshError != null) Text(refreshError, style = sys(12), color = DS.Colors.error)
+                    Text("Kontörünüzü e-belge firmanızdan satın alırsınız.", style = sys(11), color = DS.Colors.outline)
+                }
+            }
+        } else if (error != null) {
+            Text(error, style = sys(12), color = DS.Colors.error)
+        } else {
+            CreditSpinner(color = DS.Colors.cyan400)
+        }
+    }
+}
+
+/** "Kredi ile çalışan işlemler" (Ek MO.27e) — `/tarife`. */
+@Composable
+internal fun CcTariffList(tarife: KrediTarifesi?, hata: Boolean) {
+    if (tarife != null) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            tarife.tarife.forEach { s ->
+                SolSagSatir(
+                    sol = { Text(CreditLabels.operation(s.feature, s.action), style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface) },
+                ) {
+                    Text(tarife.listeMetni(s), style = sys(12, FontWeight.SemiBold), color = DS.Colors.cyan400, textAlign = TextAlign.End)
+                }
+            }
+        }
+    } else if (hata) {
+        Text("Liste yüklenemedi.", style = sys(12), color = DS.Colors.error)
+    } else {
+        CreditSpinner(color = DS.Colors.cyan400)
+    }
+}
+
 // MARK: - Hareket satırı
 
+/**
+ * Hareket satırı. "Koşullar" bağlantısı yalnız `fin.credits` iken (Ek MO2.4). Tutar yalnız sunucu verirse (hekim ₺ görmez).
+ * `modifier` tembel listede kart dilimini taşır.
+ */
 @Composable
-internal fun CcLedgerRow(row: CreditTransactionsPage.Row, tz: ZoneId, modifier: Modifier = Modifier) {
-    val signed = if (row.credits == 0.0) creditText(0.0) else (if (row.credits > 0) "+" else "−") + creditText(abs(row.credits))
-    val amountTint = if (row.credits < 0) mutedHex("fda4af") else if (row.credits > 0) DS.Colors.tertiaryContainer else DS.Colors.onSurfaceVariant
-    val kindTint = when (row.kind) {
-        "refund", "purchase", "grant" -> DS.Colors.tertiaryContainer
-        "adjustment" -> DS.Colors.orange400
+internal fun CcLedgerRow(row: CreditTransactionsPage.Row, showTerms: Boolean, onTerms: () -> Unit, modifier: Modifier = Modifier) {
+    val amountTint = if (row.credits > 0) DS.Colors.tertiaryContainer else DS.Colors.onSurface
+    val kindTint = when (row.tur) {
+        "iade", "satin_alma", "tanim" -> DS.Colors.tertiaryContainer
+        "duzeltme" -> DS.Colors.orange400
         else -> DS.Colors.slate400
     }
     Row(
-        modifier.fillMaxWidth().padding(vertical = 11.dp),
+        // `.accessibilityElement(children: .combine)` — satır tek öğe okunur ("Koşullar" ayrı düğme kalır).
+        modifier.fillMaxWidth().semantics(mergeDescendants = true) {}.padding(vertical = 11.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(CreditLabels.operation(row.feature, row.action), Modifier.weight(1f, fill = false), style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                if (row.parts > 1) Text("(${row.parts} parça)", style = sys(11), color = DS.Colors.onSurfaceVariant)
-            }
-            Text("${Unvan.dt(row.actorName)} · ${CreditDates.short(row.at, tz)}", style = sys(12), color = DS.Colors.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(row.islemMetni, style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
+            Text("${row.kisiMetni} · ${CreditDates.short(row.at)}", style = sys(12), color = DS.Colors.onSurfaceVariant)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(
-                    CreditLabels.kinds[row.kind] ?: row.kind,
+                    row.turMetni,
                     Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(kindTint.copy(alpha = 0.12f))
+                        .align(Alignment.CenterVertically)
+                        .hapZemin(kindTint.copy(alpha = 0.12f))
                         .padding(horizontal = 7.dp, vertical = 3.dp),
                     style = sys(10, FontWeight.Bold), color = kindTint,
                 )
-                val label = row.source?.let { CreditLabels.sources[it] }
-                if (label != null) Text(label, style = sys(11), color = DS.Colors.slate400)
+                row.kaynakMetni?.let { Text(it, Modifier.align(Alignment.CenterVertically), style = sys(11), color = DS.Colors.slate400) }
+                if (showTerms && row.kosulVar == true) {
+                    Text(
+                        "Koşullar",
+                        Modifier
+                            .align(Alignment.CenterVertically)
+                            .semantics { role = Role.Button }
+                            .plainClickable(onClick = onTerms),
+                        style = sys(11, FontWeight.SemiBold), color = DS.Colors.cyan400,
+                    )
+                }
             }
         }
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(signed, style = sys(15, FontWeight.Bold).monoDigits(), color = amountTint)
-            row.priceTL?.let { Text(SmileCreditFormat.lira(it), style = sys(11).monoDigits(), color = DS.Colors.onSurfaceVariant) }
+            Text(row.isaretliKredi, style = sys(15, FontWeight.Bold).monoDigits(), color = amountTint)
+            row.tutarTL?.let { Text(SmileCreditFormat.lira(it), style = sys(11).monoDigits(), color = DS.Colors.onSurfaceVariant) }
         }
     }
 }
@@ -404,21 +544,27 @@ internal fun CcLedgerRow(row: CreditTransactionsPage.Row, tz: ZoneId, modifier: 
 // MARK: - Kişi kartı
 
 @Composable
-internal fun CcPersonCard(person: CreditPeople.Person, canEdit: Boolean, onEdit: () -> Unit) {
+internal fun CcPersonCard(
+    person: CreditPeople.Person,
+    canEdit: Boolean,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Eşit yükseklikli ızgara satırında: düğme kartın dibine iner. */
+    esitYukseklik: Boolean = false,
+) {
     val subtitle = run {
         val parts = mutableListOf<String>()
-        val d = person.user.departmentLabel
-        if (d != null) parts += d else if (person.user.former == true) parts += "ayrılmış"
+        person.user.departmentLabel?.let { parts += it }
         if (person.user.active == false && person.user.former != true) parts += "pasif"
         if (parts.isEmpty()) "—" else parts.joinToString(" · ")
     }
     Column(
-        Modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp),
+        modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(verticalAlignment = Alignment.Top) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(Unvan.dt(person.user.name ?: "Bilinmeyen kişi"), style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface)
+                Text(person.user.displayName, style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurface)
                 Text(subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant)
             }
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -427,7 +573,9 @@ internal fun CcPersonCard(person: CreditPeople.Person, canEdit: Boolean, onEdit:
             }
         }
 
-        val used = person.byFeature.entries.filter { it.value.credits != 0.0 }.sortedByDescending { it.value.credits }
+        val used = remember(person.byFeature) {
+            person.byFeature.entries.filter { it.value.credits != 0.0 }.sortedByDescending { it.value.credits }
+        }
         if (used.isNotEmpty()) {
             Text(
                 used.joinToString(" · ") { "${CreditLabels.feature(it.key)} ${creditText(it.value.credits)}" },
@@ -437,22 +585,15 @@ internal fun CcPersonCard(person: CreditPeople.Person, canEdit: Boolean, onEdit:
 
         CreditDivider()
 
-        val total = person.limits.total
-        if (total != null) {
-            val pct = if (total <= 0) 1.0 else min(1.0, max(0.0, person.usedCredits) / total)
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Aylık limit", style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${creditText(person.usedCredits)} / ${creditText(total)} · kalan ${creditText(person.remainingCredits ?: 0.0)}",
-                        style = sys(12, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface,
-                    )
-                }
-                CreditProgressBar(pct, if (pct >= 1) DS.Colors.error else if (pct >= 0.8) DS.Colors.orange400 else DS.Colors.tertiaryContainer)
-            }
-        } else {
-            Text("Aylık toplam: Sınırsız", style = sys(12), color = DS.Colors.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Aylık limit", Modifier.weight(1f), style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
+            Text(
+                person.limits.total?.let { "${creditText(it)} · Kalan ${person.remainingCredits?.let { r -> creditText(r) } ?: "—"}" } ?: "Sınırsız",
+                style = sys(12, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface,
+            )
+        }
+        person.limitOrani?.let { oran ->
+            CreditProgressBar(oran, if (oran >= 1) DS.Colors.error else if (oran >= 0.8) DS.Colors.orange400 else DS.Colors.tertiaryContainer)
         }
         person.limits.features.entries.sortedBy { it.key }.forEach { (f, limit) ->
             Text(
@@ -462,168 +603,211 @@ internal fun CcPersonCard(person: CreditPeople.Person, canEdit: Boolean, onEdit:
         }
 
         if (canEdit) {
+            if (esitYukseklik) Spacer(Modifier.weight(1f))
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(38.dp)
+                    .heightIn(min = 38.dp)
+                    .semantics { contentDescription = "${person.user.displayName} · aylık kredi limiti"; role = Role.Button }
                     .pressable(onClick = onEdit)
-                    .clip(RoundedCornerShape(50))
-                    .background(DS.Colors.cyan400.copy(alpha = 0.1f))
-                    .semantics { contentDescription = "${Unvan.dt(person.user.name ?: "Kişi")} için kredi limitini düzenle" },
+                    .hapZemin(DS.Colors.cyan400.copy(alpha = 0.1f)),
                 contentAlignment = Alignment.Center,
             ) {
-                CreditIconLabel("Limiti düzenle", "slider.horizontal.3", size = 13f, weight = FontWeight.SemiBold, color = DS.Colors.cyan400, verticalAlignment = Alignment.CenterVertically)
+                CreditIconLabel(
+                    "Limiti düzenle", "slider.horizontal.3", Modifier.padding(vertical = 8.dp),
+                    size = 13f, weight = FontWeight.SemiBold, color = DS.Colors.cyan400, verticalAlignment = Alignment.CenterVertically,
+                )
             }
         }
     }
 }
 
+/** Kişiye atanmamış kullanım satırı. */
 @Composable
-internal fun CcThresholdCard(threshold: Double, onEdit: () -> Unit) {
+internal fun CcUnattributedRow(un: CreditPeople.Unattributed) {
     Row(
         Modifier.fillMaxWidth().glassCard(18.dp).padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        DfyIcon("bell.badge.fill", size = 16.dp, tint = DS.Colors.orange400)
+        DfyIcon("questionmark.circle", tint = DS.Colors.slate400)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("Kişiye atanmamış kullanım", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
+            Text("${un.operations} işlem · kişi limitine sayılmaz", style = sys(12), color = DS.Colors.onSurfaceVariant)
+        }
+        Text("${creditText(un.credits)} kredi", style = sys(14, FontWeight.Bold).monoDigits(), color = DS.Colors.onSurface)
+    }
+}
+
+@Composable
+internal fun CcThresholdCard(threshold: Double, canEdit: Boolean, onEdit: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().glassCard(18.dp).padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        DfyIcon("bell.badge", size = 16.dp, tint = DS.Colors.metal)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text("Düşük bakiye uyarısı", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
             Text(
-                if (threshold > 0) "Kullanılabilir kredi ${creditText(threshold)} altına düşünce bildirim gider." else "Kapalı",
+                "Kullanılabilir kredi bu eşiğin altına düştüğünde kredi yükleme yetkisi olanlara bildirim gider (0 = kapalı).",
                 style = sys(12), color = DS.Colors.onSurfaceVariant,
             )
+            Text("Uyarı eşiği (kredi): ${creditText(threshold)}", style = sys(12, FontWeight.SemiBold), color = DS.Colors.onSurface)
         }
-        Text("Düzenle", Modifier.plainClickable(onClick = onEdit), style = sys(13, FontWeight.SemiBold), color = DS.Colors.cyan400)
+        if (canEdit) {
+            Text(
+                "Düzenle",
+                Modifier.semantics { role = Role.Button }.plainClickable(onClick = onEdit),
+                style = sys(13, FontWeight.SemiBold), color = DS.Colors.cyan400,
+            )
+        }
     }
 }
 
-// MARK: - Yükle parçaları
+// MARK: - Kredi Yükle parçaları
 
 @Composable
-internal fun CcWalletCard(wallet: CreditUsage.Wallet) {
+internal fun CcWalletCard(wallet: SmileWallet) {
     Column(Modifier.fillMaxWidth().glassCard(22.dp).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CreditNumericText(creditText(wallet.availableCredits), sys(40, FontWeight.Bold), DS.Colors.onSurface)
-            Text("kredi", Modifier.padding(bottom = 6.dp), style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
-            Spacer(Modifier.weight(1f))
-            if (wallet.isLow) {
-                Text(
-                    "DÜŞÜK",
-                    Modifier
-                        .padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(DS.Colors.orange400)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = sys(10, FontWeight.Bold, tracking = 1), color = DS.Colors.onError,
-                )
-            }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CreditNumericText(
+                creditText(wallet.availableCredits), sys(40, FontWeight.Bold), DS.Colors.onSurface,
+                Modifier.weight(1f, fill = false).alignByBaseline(),
+            )
+            Text("kredi", Modifier.alignByBaseline(), style = sys(15, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
         }
-        if (wallet.freeGrantCredits > 0) {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Row {
-                    Text("Ücretsiz kredi", style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${creditText(wallet.freeRemainingCredits)} / ${creditText(wallet.freeGrantCredits)}",
-                        style = sys(12, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface,
-                    )
-                }
-                CreditProgressBar(wallet.freeRemainingCredits / max(wallet.freeGrantCredits, 1.0), DS.Colors.tertiaryContainer)
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            CcPill("Satın alınmış", creditText(wallet.balanceCredits), Modifier.weight(1f))
-            wallet.thisMonth?.let { m ->
-                CcPill("Bu ay kullanılan", creditText(m.usedCredits), Modifier.weight(1f))
-                if (m.purchasedTL > 0) CcPill("Bu ay faturaya", SmileCreditFormat.lira(m.purchasedTL), Modifier.weight(1f))
-            }
-        }
+        Text(
+            "Ücretsiz ${creditText(wallet.freeRemainingCredits)} · satın alınmış ${creditText(wallet.balanceCredits)}",
+            style = sys(12), color = DS.Colors.onSurfaceVariant,
+        )
     }
 }
 
 @Composable
-private fun CcPill(title: String, value: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.05f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(title, style = sys(10, FontWeight.SemiBold), color = DS.Colors.outline, maxLines = 1)
-        Text(value, style = sys(14, FontWeight.Bold).monoDigits(), color = DS.Colors.onSurface, maxLines = 1)
-    }
-}
-
-@Composable
-internal fun CcPackCard(pack: SmileCreditPack, enabled: Boolean, onBuy: () -> Unit) {
+internal fun CcPackCard(pack: SmileCreditPack, enabled: Boolean, onBuy: () -> Unit, modifier: Modifier = Modifier) {
     val highlight = pack.popular == true
-    // Rozet sunucunun serbest metni değil paketin BAYRAĞINDAN (web ile aynı üç etiket).
+    val liste = pack.listPriceTL
+    // Ek MO.21i rozetleri — paketin BAYRAĞINDAN.
     val badge = when {
-        pack.popular == true -> "Popüler"
-        pack.bestValue == true -> "En iyi teklif"
-        else -> if (pack.badge == null) null else "Başlangıç"
+        pack.popular == true -> "En çok tercih edilen"
+        pack.bestValue == true -> "En avantajlı"
+        else -> null
     }
-    val shape = RoundedCornerShape(20.dp)
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .glassCard(20.dp)
-            .border(1.2.dp, if (highlight) DS.Colors.cyan400.copy(alpha = 0.7f) else Color.Transparent, shape)
+            .then(
+                if (highlight) Modifier.drawBehind {
+                    val k = 1.2.dp.toPx()
+                    drawRoundRect(
+                        DS.Colors.cyan400.copy(alpha = 0.7f), Offset(k / 2, k / 2), Size(size.width - k, size.height - k),
+                        CornerRadius(20.dp.toPx() - k / 2), style = Stroke(k),
+                    )
+                } else Modifier,
+            )
             .padding(16.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${creditText(pack.credits)} kredi", style = sys(17, FontWeight.Bold), color = DS.Colors.onSurface)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "${creditText(pack.credits)} kredi", Modifier.align(Alignment.CenterVertically),
+                    style = sys(17, FontWeight.Bold), color = DS.Colors.onSurface,
+                )
                 if (badge != null) {
                     Text(
                         badge.upperTr(),
                         Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(if (highlight) DS.Colors.cyan400 else DS.Colors.cyan400.copy(alpha = 0.12f))
+                            .align(Alignment.CenterVertically)
+                            .hapZemin(if (highlight) DS.Colors.cyan400 else DS.Colors.cyan400.copy(alpha = 0.12f))
                             .padding(horizontal = 6.dp, vertical = 3.dp),
                         style = sys(9, FontWeight.Bold, tracking = 0.8),
                         color = if (highlight) DS.Colors.onPrimary else DS.Colors.cyan400,
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (pack.indirimVar && liste != null) {
+                Text(
+                    "${SmileCreditFormat.lira(liste)} yerine · %${pack.discountPct?.let { creditText(it) } ?: ""} sözleşme indirimi",
+                    style = sys(11), color = DS.Colors.tertiaryContainer,
+                )
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 pack.unitPriceTL?.let { Text("kredi başı ${SmileCreditFormat.lira(it)}", style = sys(11), color = DS.Colors.onSurfaceVariant) }
                 val save = pack.savePct
                 if (save != null && save > 0) Text("%$save tasarruf", style = sys(11, FontWeight.SemiBold), color = DS.Colors.tertiaryContainer)
             }
+            if (pack.priceTL == null) {
+                Text("Paket fiyatı şu an okunamıyor.", style = sys(11), color = DS.Colors.orange400)
+            }
         }
-        Column(
-            Modifier
-                .alpha(if (enabled) 1f else 0.4f)
-                .pressable(enabled = enabled, onClick = onBuy)
-                .height(48.dp)
-                .clip(RoundedCornerShape(50))
-                .background(DS.Gradients.primaryGradient)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(SmileCreditFormat.lira(pack.priceTL), style = sys(15, FontWeight.Bold), color = Color.White)
-            Text("Satın al", Modifier.alpha(0.85f), style = sys(10, FontWeight.SemiBold), color = Color.White)
+        val price = pack.priceTL
+        if (price != null) {
+            // Satın alma `fin.credits` ister — yetkisizse sönük, dokununca uyarı (M-E7.4); sunucunun `canPurchase` kararı AYNEN.
+            val etiket: @Composable (Modifier) -> Unit = { mod ->
+                Column(
+                    mod
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(DS.Gradients.primaryGradient)
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    if (pack.indirimVar && liste != null) {
+                        Text(
+                            SmileCreditFormat.lira(liste), Modifier.alpha(0.75f),
+                            style = sys(10).copy(textDecoration = TextDecoration.LineThrough), color = Color.White, maxLines = 1,
+                        )
+                    }
+                    Text(SmileCreditFormat.lira(price), style = sys(15, FontWeight.Bold), color = Color.White, maxLines = 1)
+                    Text("Satın al", Modifier.alpha(0.85f), style = sys(10, FontWeight.SemiBold), color = Color.White, maxLines = 1)
+                }
+            }
+            if (enabled) {
+                YetkiliButon(listOf("fin.credits"), eylem = onBuy) { mod -> etiket(mod) }
+            } else {
+                // `.disabled(!enabled).opacity(0.4)` — dokunuş yok; yetkisizse YetkiliButon'un sönüklüğü de eklenir.
+                val izinli = yetkiliMi(listOf("fin.credits"))
+                etiket(Modifier.alpha(0.4f * (if (izinli) 1f else YetkiliEylem.SONUK_OPAKLIK)))
+            }
         }
     }
 }
 
-@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 1400)
 @Composable
 private fun CcPartsPreview() {
     com.dentifay.app.ui.PreviewEnv {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            val u = CreditPreviewData.usage
-            CcKpiGrid(u)
-            CcPersonCard(CreditPreviewData.people.people[0], canEdit = true) {}
-            CcPackCard(CreditPreviewData.packs[1], enabled = true) {}
-            Column(Modifier.fillMaxWidth().glassCard(18.dp).padding(horizontal = 14.dp)) {
-                CcLedgerRow(CreditPreviewData.rows[0], java.time.ZoneId.of("Europe/Istanbul"))
+            val a = CreditPreviewData.analysis
+            CcKpiGrid(CreditPreviewData.wallet, a, sutun = 2)
+            CcCard("Özelliğe göre kullanım", null) { CcFeatureBreakdown(a.features, a.features.map { it.feature }) }
+            CcPersonCard(CreditPreviewData.people.people[0], canEdit = true, onEdit = {})
+            CcPackCard(CreditPreviewData.packs[1], enabled = true, onBuy = {})
+            CcPackCard(CreditPreviewData.packs[2], enabled = false, onBuy = {})
+            Column {
+                CreditPreviewData.rows.take(3).forEachIndexed { i, r ->
+                    CcLedgerRow(r, showTerms = true, onTerms = {}, Modifier.kartDilimi(ilk = i == 0, son = i == 2).padding(horizontal = 14.dp))
+                }
             }
+        }
+    }
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun CcPartsTabletPreview() {
+    com.dentifay.app.ui.PreviewEnv(pencere = com.dentifay.app.ui.PencereBilgisi.TABLET_YATAY) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            CcKpiGrid(CreditPreviewData.wallet, CreditPreviewData.analysis, sutun = 4)
+            EsitIzgara(CreditPreviewData.packs, sutun = 3, bosluk = 12.dp) { p, mod -> CcPackCard(p, enabled = true, onBuy = {}, modifier = mod) }
         }
     }
 }

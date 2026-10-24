@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/YapayZekaIkon.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 16 3.385 V 2 m 3.63 2.364 l .978 -.98 M 20.618 8 H 22 m 0 4 c 0 5.523 -4.477 10 -10 10 S 2 17.523 2 12 S 6.477 2 12 2"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 11.853 8.007 h 3.222 c .379 0 .686 .315 .686 .703 v 3.325 m -13 1.923 c 2.273 .266 7.977 -.444 12.131 -5.068"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

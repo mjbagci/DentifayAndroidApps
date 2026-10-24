@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/Square.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 22 12 C 22 17.5228 17.5228 22 12 22 C 6.47715 22 2 17.5228 2 12 C 2 6.47715 6.47715 2 12 2 C 17.5228 2 22 6.47715 22 12 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 8.58579 8.58579 C 8 9.17157 8 10.1144 8 12 C 8 13.8856 8 14.8284 8.58579 15.4142 C 9.17157 16 10.1144 16 12 16 C 13.8856 16 14.8284 16 15.4142 15.4142 C 16 14.8284 16 13.8856 16 12 C 16 10.1144 16 9.17157 15.4142 8.58579 C 14.8284 8 13.8856 8 12 8 C 10.1144 8 9.17157 8 8.58579 8.58579 Z"
+        android:fillColor="#FF000000" />
+</vector>

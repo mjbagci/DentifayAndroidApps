@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/CreditCard.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 9.99976 20 H 13.9998 C 17.771 20 19.6566 20 20.8282 18.8284 C 21.9998 17.6569 21.9998 15.7712 21.9998 12 C 21.9998 11.5581 21.9981 10.392 21.9962 10 H 2 C 1.99811 10.392 1.99976 11.5581 1.99976 12 C 1.99976 15.7712 1.99976 17.6569 3.17133 18.8284 C 4.34291 20 6.22852 20 9.99976 20 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 10 15.25 C 10.4142 15.25 10.75 15.5858 10.75 16 C 10.75 16.4142 10.4142 16.75 10 16.75 H 6 C 5.58579 16.75 5.25 16.4142 5.25 16 C 5.25 15.5858 5.58579 15.25 6 15.25 H 10 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M 14 15.25 C 14.4142 15.25 14.75 15.5858 14.75 16 C 14.75 16.4142 14.4142 16.75 14 16.75 H 12.5 C 12.0858 16.75 11.75 16.4142 11.75 16 C 11.75 15.5858 12.0858 15.25 12.5 15.25 H 14 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M 14.0049 4 C 17.7858 4 19.677 4.00043 20.8516 5.11621 C 21.6969 5.91957 21.9337 7.07538 22 9 V 10 H 2 V 9 C 2.06629 7.07538 2.30305 5.91957 3.14844 5.11621 C 4.32303 4.00043 6.21416 4 9.99512 4 H 14.0049 Z"
+        android:fillColor="#FF000000" />
+</vector>

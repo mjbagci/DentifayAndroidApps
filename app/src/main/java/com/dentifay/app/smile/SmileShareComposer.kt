@@ -35,6 +35,11 @@ import kotlin.math.roundToInt
  * sonra yan yana, koyu lacivert zemin, şampanya altını ince çizgiler, serif
  * başlık (hasta adı), Dentifay logosu, tarih ve yapay zeka uyarısı. "Detaylı"
  * düzende altına gülüş yakın planı da yan yana eklenir.
+ *
+ * ŞABLON ORTAKTIR: web'deki Gülüş Tasarımı kartı (DentAIWeb ·
+ * `frontend/src/features/gulus-karti/gulus-karti.js`) bu dosyadaki ölçüleri (birim = genişliğin
+ * %1'i: kenar 5.5, ara 2.2, logo 7, başlık 4.6 …), paleti ve metinleri birebir kullanır. Burada
+ * bir ölçü, renk ya da metin değişirse web'deki (ve iOS'taki) karşılığı da değiştirilmelidir.
  */
 data class SmileShareContent(
     /** Tam fotoğraf (çekildiği gibi, yönü düzeltilmiş). */
@@ -80,6 +85,11 @@ object SmileShareComposer {
 
     /** Kanvas genişliği (px). Mesaj/e-posta için net, WhatsApp sıkıştırmasına dayanıklı. */
     private const val canvasWidth = 2400f
+
+    /** Logo bir kez çözülür (önizleme her ad değişiminde yeniden çizilir). */
+    private val logo: Bitmap? by lazy {
+        Prefs.appContext?.let { runCatching { BitmapFactory.decodeResource(it.resources, R.drawable.dentifay_splash_00) }.getOrNull() }
+    }
 
     private fun withAlpha(c: Int, a: Float): Int = Color.argb((a * 255).roundToInt(), Color.red(c), Color.green(c), Color.blue(c))
 
@@ -301,12 +311,12 @@ object SmileShareComposer {
         val path = Path().apply { addRoundRect(rect, corner, corner, Path.Direction.CW) }
         g.save()
         g.clipPath(path)
-        val logo = Prefs.appContext?.let { runCatching { BitmapFactory.decodeResource(it.resources, R.drawable.dentifay_splash_00) }.getOrNull() }
-        if (logo != null) {
-            val side = min(logo.width, logo.height).toFloat()
+        val mark = logo
+        if (mark != null) {
+            val side = min(mark.width, mark.height).toFloat()
             val inset = side * 0.16f
             val crop = android.graphics.Rect(inset.toInt(), inset.toInt(), ceil(side - inset).toInt(), ceil(side - inset).toInt())
-            g.drawBitmap(logo, crop, rect, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+            g.drawBitmap(mark, crop, rect, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
         } else {
             g.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(cyan, 0.2f) })
         }

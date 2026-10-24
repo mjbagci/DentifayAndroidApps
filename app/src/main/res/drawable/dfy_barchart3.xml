@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/BarChart3.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 21 21 H 10 c -3.3 0 -4.95 0 -5.975 -1.025 S 3 17.3 3 14 V 3"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M 13 10 v 11 m 5 -8 v 8 M 8 13 v 7 M 21 7.987 c -1.84 0 -3.808 .256 -5.123 -1.494 c -1.497 -1.99 -4.257 -1.99 -5.754 0 C 8.808 8.243 6.84 7.987 5 7.987 H 3"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

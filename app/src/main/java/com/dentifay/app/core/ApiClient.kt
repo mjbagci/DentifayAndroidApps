@@ -48,10 +48,24 @@ sealed class ApiException(message: String, cause: Throwable? = null) : Exception
     class InvalidUrl : ApiException("Invalid URL")
     class Unauthorized : ApiException("Session expired. Please login again.")
     class ServerError(val code: Int, val serverMessage: String?) : ApiException(serverMessage ?: "Server error ($code)")
+    /**
+     * Kodlu 4xx (M-E8.0): sunucunun `code`u ve cümlesi KORUNUR. Kendi yolu olmayan her kod (bilinmeyenler dahil) yalnız
+     * sunucunun cümlesiyle kısa uyarı olur ve HİÇBİR ŞEY kaydedilmiş sayılmaz; 409 sürüm çakışması gibi kendi yolu olanları çağıran yakalar.
+     */
+    class Kodlu(val httpDurumu: Int, val sunucuKodu: String, val cumle: String?) : ApiException(cumle ?: "İşlem tamamlanamadı.")
     class DecodingError(cause: Throwable) : ApiException("Data error: ${cause.message}", cause)
     class NetworkError(cause: Throwable) : ApiException("Network error: ${cause.message}", cause)
-    /** `POST /ai/tts` → 429 `TTS_DAILY_QUOTA`. */
-    class SpeechQuotaExceeded : ApiException("Bugünkü seslendirme hakkı doldu. Metin ekranda gösteriliyor.")
+
+    /** HTTP durumu (`ServerError` · `Kodlu`). */
+    val status: Int?
+        get() = when (this) {
+            is ServerError -> code
+            is Kodlu -> httpDurumu
+            else -> null
+        }
+
+    /** Sunucunun makine kodu (yalnız `Kodlu`). */
+    val kod: String? get() = (this as? Kodlu)?.sunucuKodu
 }
 
 /** Ham HTTP sonucu (SSE / çok parçalı / ikili uçlar için). */
@@ -96,26 +110,57 @@ object ApiClient {
         return b.build().toString()
     }
 
-    fun requestBuilder(method: String, path: String, body: JsonElement? = null, query: List<Pair<String, String?>> = emptyList()): Request.Builder {
+    /** Saf istek kurucu (Swift `APIClient.istek`): gövde yoksa GET/HEAD'de gövdesiz; `headers` eklenir. */
+    fun requestBuilder(
+        method: String,
+        path: String,
+        body: JsonElement? = null,
+        query: List<Pair<String, String?>> = emptyList(),
+        headers: Map<String, String> = emptyMap(),
+    ): Request.Builder {
         val reqBody = when {
             body != null -> DfyJson.encodeToString(JsonElement.serializer(), body).toRequestBody(JSON_MEDIA)
             method == "GET" || method == "HEAD" -> null
             else -> ByteArray(0).toRequestBody(JSON_MEDIA)
         }
-        return Request.Builder().url(buildUrl(path, query)).method(method, reqBody).header("Content-Type", "application/json")
+        val b = Request.Builder().url(buildUrl(path, query)).method(method, reqBody).header("Content-Type", "application/json")
+        headers.forEach { (ad, deger) -> b.header(ad, deger) }
+        return b
     }
 
     /**
-     * 401 → oturum olayı + `Unauthorized`; 402 → `CreditRequired`; 2xx değilse `ServerError`
-     * (yalnız sunucunun Türkçe cümlesi). Başarılıysa gövdeyi döndürür.
+     * Hata gövdesinden atılacak hata (saf — test edilebilir). 4xx'te kod varsa `Kodlu` (cümle korunur); kodsuz 403 yetki reddi
+     * `ServerError(403, "Bu işlem için yetkiniz yok.")` (M-E7.5); 5xx ve kodsuz öteki durumlar `ServerError`.
+     * Kendi yolları: 401 → `Unauthorized` (çağıran), 402/403 kredi → `CreditRequired` (çağıran), 403 kurulum → bekleme ekranı olayı,
+     * 403 `PASSWORD_CHANGE_REQUIRED` → şifre ekranı olayı.
+     */
+    fun hata(status: Int, data: ByteArray): ApiException {
+        val kod = serverCode(data)
+        if (status == 403) {
+            val cumle = hataCumlesi(403, data)   // kurulum kapısı olayı burada (Yetki.yasakMetni)
+            if (kod == SifreOlayi.KOD) SifreOlayi.bildir()
+            if (kod != null && Yetki.ret(data) != Yetki.Ret.Yetki) return ApiException.Kodlu(403, kod, cumle)
+            return ApiException.ServerError(403, cumle)
+        }
+        if (status in 400..499 && kod != null) return ApiException.Kodlu(status, kod, serverSentence(data))
+        return ApiException.ServerError(status, serverSentence(data))
+    }
+
+    /**
+     * 401 → oturum olayı + `Unauthorized`; 402 (ve demo 403) → `CreditRequired`; 409 hakediş → `HakedisOnayiGerekli`;
+     * kara liste → `KaraListeEngeli`; 2xx değilse `hata(...)`. Başarılıysa gövdeyi döndürür.
      */
     fun checkStatus(raw: RawResponse, path: String): ByteArray {
         if (raw.status == 401) {
             SessionEvents.report401(raw.body, path)
             throw ApiException.Unauthorized()
         }
+        // 402 = kredi gerekli (her kredili uçta aynı gövde) → tek model, ham JSON gösterilmez.
         CreditRequired.parse(raw.status, raw.body)?.let { throw it }
-        if (raw.status !in 200..299) throw ApiException.ServerError(raw.status, serverSentence(raw.body))
+        // 409 hakediş etkisi onayı → pencere (M-E8.10); öteki 409'lar aşağıda kodlu.
+        HakedisEtkisi.ayristir(raw.status, raw.body)?.let { throw it }
+        KaraListeEngeli.ayristir(raw.status, raw.body)?.let { throw it }
+        if (raw.status !in 200..299) throw hata(raw.status, raw.body)
         return raw.body
     }
 
@@ -127,8 +172,9 @@ object ApiClient {
         body: JsonElement? = null,
         query: List<Pair<String, String?>> = emptyList(),
         timeoutSeconds: Long? = null,
+        headers: Map<String, String> = emptyMap(),
     ): T = withContext(Dispatchers.IO) {
-        val req = requestBuilder(method, path, body, query).build()
+        val req = requestBuilder(method, path, body, query, headers).build()
         val client = timeoutSeconds?.let { http.newBuilder().callTimeout(it, TimeUnit.SECONDS).readTimeout(it, TimeUnit.SECONDS).build() } ?: http
         val raw = execute(req, client)
         val data = checkStatus(raw, path)
@@ -146,7 +192,8 @@ object ApiClient {
         body: JsonElement? = null,
         query: List<Pair<String, String?>> = emptyList(),
         timeoutSeconds: Long? = null,
-    ): T = request(serializer<T>(), method, path, body, query, timeoutSeconds)
+        headers: Map<String, String> = emptyMap(),
+    ): T = request(serializer<T>(), method, path, body, query, timeoutSeconds, headers)
 
     /** `@Serializable` gövdeyi JsonElement'e çevirir. */
     inline fun <reified B> body(value: B): JsonElement = DfyJson.encodeToJsonElement(serializer<B>(), value)
@@ -162,25 +209,50 @@ object ApiClient {
 
     suspend fun checkSession(): LoginResponse = request(path = "/auth/session")
 
+    /**
+     * Kullanıcının aktif üyelikleri — klinik ADI burada döner. `/auth/session` oturum nesnesinde üyelik listesi
+     * (dolayısıyla klinik adı) YOKTUR; ekranda marka adı UYDURMAMAK için bu uç okunur.
+     */
+    suspend fun fetchOrganizations(): List<APIMembership> = request<OrganizationsResponse>(path = "/auth/organizations").organizations
+
     // MARK: - Appointments
 
-    /** Randevu durumu (`PATCH /appointments/:id`); `notifyPatient` hastaya SMS gidip gitmeyeceği. */
-    suspend fun updateAppointmentStatus(id: String, status: String, notifyPatient: Boolean) {
-        val b = buildJsonObject { put("status", status); put("notifyPatient", notifyPatient) }
-        request<JsonElement>(method = "PATCH", path = "/appointments/$id", body = b)
+    /**
+     * Randevu durumu (`PATCH /appointments/:id`). `notifyPatient` YALNIZ "Sor" kipindeki türde kullanıcının cevabıyla gider;
+     * `null` → alan gövdede YOK (otomatik kipte sunucu kendisi gönderir — M-E3.5).
+     */
+    suspend fun updateAppointmentStatus(id: String, status: String, notifyPatient: Boolean?) {
+        request<JsonElement>(method = "PATCH", path = "/appointments/$id", body = durumGovdesi(status, notifyPatient))
     }
 
-    suspend fun fetchAppointments(startDate: String, endDate: String, doctorUserId: String? = null): List<APIAppointment> {
+    /** `PATCH /appointments/:id` gövdesi — `notifyPatient` null ise kodlanmaz. */
+    fun durumGovdesi(status: String, notifyPatient: Boolean?): JsonObject = buildJsonObject {
+        put("status", status)
+        if (notifyPatient != null) put("notifyPatient", notifyPatient)
+    }
+
+    suspend fun fetchAppointments(
+        startDate: String,
+        endDate: String,
+        doctorUserId: String? = null,
+        category: String? = null,
+    ): List<APIAppointment> {
         val resp: AppointmentsResponse = request(
             path = "/appointments",
-            query = listOf("startDate" to startDate, "endDate" to endDate, "doctorUserId" to doctorUserId),
+            query = listOf("startDate" to startDate, "endDate" to endDate, "doctorUserId" to doctorUserId, "category" to category),
         )
         return resp.appointments
     }
 
     // MARK: - Doctors / Patients / Inventory
 
-    suspend fun fetchDoctors(): List<APIDoctorMember> = request<DoctorsResponse>(path = "/schedule/doctors").doctors
+    /** Seçili günün takvim sütunları (`?date=YYYY-MM-DD` → `{doctors, closedDoctors, day}`). Hekim kümesi sunucunun. */
+    suspend fun fetchScheduleDoctors(date: String): TakvimHekimleri =
+        request(path = "/schedule/doctors", query = listOf("date" to date))
+
+    /** Yeni plan/kalemin hekimi olabilenler (`?atanabilir=1`) — web plan ekranıyla AYNI küme (26E.2). */
+    suspend fun fetchAssignableDoctors(): List<APIDoctorMember> =
+        request<AtanabilirHekimler>(path = "/schedule/doctors", query = listOf("atanabilir" to "1")).doctors
 
     suspend fun fetchPatients(): List<APIPatient> = request<PatientsResponse>(path = "/patients").patients
 
@@ -193,35 +265,22 @@ object ApiClient {
         return request<PatientSearchResponse>(path = "/patients", query = q).patients
     }
 
-    // MARK: - Bildirimler (`/api/bildirimler`)
+    // MARK: - Bildirimler (`/api/bildirimler` — sözleşme §5; `kanal` YOK, gönderilirse 400)
 
-    /** Kanal: "INBOX" (bildirimler) ya da "ALERT" (anlık uyarılar). */
-    suspend fun fetchNotifications(channel: String, limit: Int = 40): APINotificationList =
-        request(path = "/bildirimler", query = listOf("kanal" to channel, "limit" to "$limit"))
+    fun bildirimListesiSorgusu(page: Int, limit: Int): List<Pair<String, String?>> = listOf("page" to "$page", "limit" to "$limit")
+    const val TUMUNU_OKUNDU_YOLU = "/bildirimler/okundu"
+    fun tekOkunduYolu(id: String): String = "/bildirimler/$id/okundu"
+
+    suspend fun fetchNotifications(page: Int = 1, limit: Int = 30): APINotificationList =
+        request(path = "/bildirimler", query = bildirimListesiSorgusu(page, limit))
 
     suspend fun fetchNotificationCount(): APINotificationCount = request(path = "/bildirimler/sayac")
 
-    suspend fun markNotificationsRead(channel: String) {
-        request<APINotificationReadResult>(method = "POST", path = "/bildirimler/okundu", body = buildJsonObject { put("kanal", channel) })
-    }
+    /** Toplu okundu — GÖVDESİZ (gövde → 400). */
+    suspend fun markAllNotificationsRead(): APINotificationReadResult = request(method = "POST", path = TUMUNU_OKUNDU_YOLU)
 
-    // MARK: - TTS
-
-    suspend fun synthesizeSpeech(text: String, language: String = "tr"): ByteArray = withContext(Dispatchers.IO) {
-        val req = requestBuilder("POST", "/ai/tts", buildJsonObject { put("text", text); put("language", language) }).build()
-        val raw = execute(req, http.newBuilder().callTimeout(30, TimeUnit.SECONDS).build())
-        if (raw.status == 401) {
-            SessionEvents.report401(raw.body, "/ai/tts")
-            throw ApiException.Unauthorized()
-        }
-        CreditRequired.parse(raw.status, raw.body)?.let { throw it }
-        if (raw.status == 429) {
-            val code = runCatching { DfyJson.parseToJsonElement(raw.body.toString(Charsets.UTF_8)).jsonObject["code"] }.getOrNull()
-            if ((code as? JsonPrimitive)?.contentOrNull == "TTS_DAILY_QUOTA") throw ApiException.SpeechQuotaExceeded()
-        }
-        if (raw.status !in 200..299) throw ApiException.ServerError(raw.status, serverSentence(raw.body))
-        raw.body
-    }
+    /** Tek satır okundu (zaten okunmuşsa da 200; 404 → satır listeden düşer). */
+    suspend fun markNotificationRead(id: String): APINotificationReadResult = request(method = "POST", path = tekOkunduYolu(id))
 }
 
 /**
@@ -285,20 +344,5 @@ object SessionEvents {
         "ORGANIZATION_SUSPENDED" -> "Kliniğinizin Dentifay hesabı askıya alındı."
         "ORGANIZATION_ARCHIVED" -> "Kliniğinizin Dentifay hesabı kapatıldı."
         else -> null
-    }
-}
-
-/** Hekim unvanı her yerde "Dt."; "Dr." hiçbir ekranda görünmez. */
-object Unvan {
-    private val dotted = Regex("""(?<![\p{L}\p{N}])[Dd][Rr]\.(?=\s|$)""")
-    private val leading = Regex("""^[Dd][Rr](?=\s)""")
-    private val doubled = Regex("""Dt\.\s+Dt\.""")
-
-    fun dt(text: String): String {
-        if (!text.contains("dr", ignoreCase = true)) return text
-        var out = dotted.replace(text, "Dt.")
-        out = leading.replace(out, "Dt.")
-        out = doubled.replace(out, "Dt.")
-        return out
     }
 }

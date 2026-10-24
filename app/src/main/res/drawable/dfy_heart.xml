@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Heart.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 10.41 19.968 C 7.59 17.858 2 13.035 2 8.694 C 2 5.826 4.105 3.5 7 3.5 c 1.5 0 3 .5 5 2.5 c 2 -2 3.5 -2.5 5 -2.5 c 2.895 0 5 2.326 5 5.194 c 0 4.34 -5.59 9.164 -8.41 11.274 c -.95 .71 -2.23 .71 -3.18 0"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

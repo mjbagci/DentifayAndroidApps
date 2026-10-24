@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/Search.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 20.313 11.157 a 9.157 9.157 0 1 1 -18.313 0 a 9.157 9.157 0 0 1 18.313 0"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="m 17.1 18.122 l 3.666 3.666 a .723 .723 0 0 0 1.023 -1.022 L 18.122 17.1 a 9 9 0 0 1 -1.022 1.022"
+        android:fillColor="#FF000000" />
+</vector>

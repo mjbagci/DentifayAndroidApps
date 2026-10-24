@@ -22,11 +22,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -42,7 +41,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +55,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -82,7 +79,9 @@ import com.dentifay.app.R
 import com.dentifay.app.auth.AuthManager
 import com.dentifay.app.auth.BiometricAuth
 import com.dentifay.app.auth.LocalAuthManager
+import com.dentifay.app.core.ApiClient
 import com.dentifay.app.core.AppConfig
+import com.dentifay.app.core.sifreSifirlamaAcik
 import com.dentifay.app.smile.SmileSimulationView
 import com.dentifay.app.theme.BrandLockup
 import com.dentifay.app.theme.ButtonLabel
@@ -97,7 +96,6 @@ import com.dentifay.app.theme.SecondaryButton
 import com.dentifay.app.theme.appear
 import com.dentifay.app.theme.horizontalGradient
 import com.dentifay.app.theme.mutedHex
-import com.dentifay.app.theme.openInBrowser
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.pressable
 import com.dentifay.app.theme.relativeLinearGradient
@@ -109,19 +107,29 @@ import com.dentifay.app.trial.GuestContactSheet
 import com.dentifay.app.trial.GuestTrialFeature
 import com.dentifay.app.trial.GuestTrialStore
 import com.dentifay.app.trial.TrialQuotaChip
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import com.dentifay.app.xray.XrayAnalysisView
 import com.dentifay.app.xray.XrayAnalysisViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
+
+/**
+ * Giriş akışının ekrandan bağımsız işleri (Swift `Task { }`): giriş, biyometrik giriş, şifre kaydı, kurulum yoklaması,
+ * çıkış. Kök ekran değişince (oturum açıldı, şifre kaydedildi, kurulum bitti) yarıda kesilmez — ör. girişten sonra klinik
+ * adının okunması ve "oturumu açık tut" kaydı tamamlanır.
+ */
+internal val girisKapsami: CoroutineScope = MainScope()
 
 private enum class Field { email, password }
 
 /**
  * Giriş ekranı — web giriş sayfasının (`frontend/src/pages/auth/LoginPage`) mobil karşılığı.
  *
- * Düzen (yukarıdan aşağı, ortalı, en fazla 440 dp genişlik):
+ * Düzen (yukarıdan aşağı, ortalı, en fazla 440 dp genişlik; tablette ve yatayda ortada, sığmazsa kaydırılır):
  *   1. Marka: küçük logo + "Dentifay" yazısı yan yana
- *   2. Giriş kartı (e-posta/kullanıcı adı, şifre, oturumu açık tut, biyometrik)
+ *   2. Giriş kartı (telefon numarası, şifre, oturumu açık tut, biyometrik)
  *   3. Ücretsiz deneme: Röntgen Analizi ve Gülüş Simülasyonu (Önce / Sonra) — giriş yapmadan,
  *      IP başına her biri için 5 hak (`/api/public/trial`); hak bitince iletişim sayfası.
  *
@@ -131,9 +139,7 @@ private enum class Field { email, password }
 @Composable
 fun LoginView(screenReady: Boolean) {
     val authManager = LocalAuthManager.current
-    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
-    val scope = rememberCoroutineScope()
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -147,6 +153,9 @@ fun LoginView(screenReady: Boolean) {
     var showXray by remember { mutableStateOf(false) }
     var showSmile by remember { mutableStateOf(false) }
     var showContact by remember { mutableStateOf(false) }
+    var sifremiUnuttum by remember { mutableStateOf(false) }
+    /** "Şifremi unuttum" yalnız sunucuda SMS ile sıfırlama açıkken görünür (M-E8.6). */
+    var smsSifirlama by remember { mutableStateOf(false) }
     var focusedField by remember { mutableStateOf<Field?>(null) }
     val passwordFocus = remember { FocusRequester() }
     val trial = GuestTrialStore.shared
@@ -173,7 +182,7 @@ fun LoginView(screenReady: Boolean) {
     fun maybeAutoPromptBiometrics() {
         if (!screenReady || !AuthManager.biometricEnabled || !canUseBiometrics || didAutoPrompt) return
         didAutoPrompt = true
-        scope.launch { runBiometricLogin() }
+        girisKapsami.launch { runBiometricLogin() }
     }
 
     fun submit() {
@@ -181,7 +190,8 @@ fun LoginView(screenReady: Boolean) {
         Haptics.medium()
         clearFocus()
         isLoading = true
-        scope.launch {
+        // Ekrandan bağımsız: oturum açılınca giriş ekranı kökten kalkar; girişin kalanı (klinik adı, oturum kaydı) sürer.
+        girisKapsami.launch {
             authManager.login(email, password, remember = rememberSession)
             // Giriş başarılıysa ve biyometrik henüz açık değilse, giriş sonrası
             // "biyometrik açılsın mı?" teklifini hazırla (ContentView gösterir).
@@ -199,12 +209,15 @@ fun LoginView(screenReady: Boolean) {
         maybeAutoPromptBiometrics()
         trial.refresh()
     }
+    // Ayrı istek (Swift ayrı `.task`): deneme durumu beklenmeden SMS sıfırlamanın açık olup olmadığı okunur.
+    LaunchedEffect("smsSifirlama") { smsSifirlama = ApiClient.sifreSifirlamaAcik() }
     LaunchedEffect(screenReady) { maybeAutoPromptBiometrics() }
 
     Box(Modifier.fillMaxSize()) {
         LoginBackdrop()
 
-        BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+        // Sistem çubukları + klavye + çentik (yatay tablette yan çentik dahil) içerik dışında kalır.
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
             val minH = maxHeight
             // Tek ekrana sığacak şekilde ölçülü; daha küçük ekranda ya da klavye açıkken kaydırılabilir.
             Column(
@@ -250,9 +263,10 @@ fun LoginView(screenReady: Boolean) {
                             loginError = authManager.loginError,
                             onBiometric = {
                                 Haptics.light()
-                                scope.launch { runBiometricLogin() }
+                                girisKapsami.launch { runBiometricLogin() }
                             },
-                            onForgot = { openInBrowser(context, AppConfig.webBaseURL + "/login") },
+                            showForgot = smsSifirlama,
+                            onForgot = { clearFocus(); sifremiUnuttum = true },
                             onSubmit = { submit() },
                         )
 
@@ -280,6 +294,9 @@ fun LoginView(screenReady: Boolean) {
     DfySheet(isPresented = showContact, onDismiss = { showContact = false }) { dismiss ->
         GuestContactSheet(onDismiss = dismiss)
     }
+    DfySheet(isPresented = sifremiUnuttum, onDismiss = { sifremiUnuttum = false }) { dismiss ->
+        SifremiUnuttumSheet(onDismiss = dismiss)
+    }
 }
 
 // MARK: - Giriş kartı
@@ -305,6 +322,7 @@ private fun LoginCard(
     biometricIcon: String,
     loginError: String?,
     onBiometric: () -> Unit,
+    showForgot: Boolean,
     onForgot: () -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -343,17 +361,19 @@ private fun LoginCard(
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            FieldLabel("E-posta veya kullanıcı adı")
-            LoginField(icon = "envelope", focused = focusedField == Field.email) {
+            // Giriş kimliği telefon numarası (web `auth.login.email` = "Telefon numarası"); sunucu `email` alanını kimlik
+            // olarak okur, e-postayla giriş yalnız telefonsuz eski hesaplarda geçer.
+            FieldLabel("Telefon numarası")
+            LoginField(icon = "phone", focused = focusedField == Field.email) {
                 LoginTextField(
                     value = email,
                     onValueChange = onEmailChange,
-                    placeholder = "hekim@klinik.com veya ad.soyad",
+                    placeholder = "05XX XXX XX XX",
                     modifier = Modifier.weight(1f).onFocusChanged { onFocusChange(Field.email, it.isFocused) },
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
                         autoCorrectEnabled = false,
-                        keyboardType = KeyboardType.Email,
+                        keyboardType = KeyboardType.Phone,
                         imeAction = ImeAction.Next,
                     ),
                     keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
@@ -365,18 +385,22 @@ private fun LoginCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FieldLabel("Şifre")
                 Spacer(Modifier.weight(1f))
-                val underline = DS.Colors.hairlineFocus
-                Text(
-                    "ŞİFREMİ UNUTTUM",
-                    Modifier
-                        .plainClickable(onClick = onForgot)
-                        .drawBehind {
-                            val y = size.height + 3.dp.toPx()
-                            drawRect(underline, topLeft = Offset(0f, y - 0.5.dp.toPx()), size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx()))
-                        },
-                    style = sys(10.5, FontWeight.Medium, tracking = 0.8).copy(fontFamily = FontFamily.Monospace),
-                    color = DS.Colors.Login.fg1,
-                )
+                // Yalnız sunucuda SMS ile sıfırlama açıkken (M-E8.6) — SMS ile geçici şifre sayfası.
+                if (showForgot) {
+                    val underline = DS.Colors.hairlineFocus
+                    Text(
+                        "ŞİFREMİ UNUTTUM",
+                        Modifier
+                            .plainClickable(onClick = onForgot)
+                            .drawBehind {
+                                val y = size.height + 3.dp.toPx()
+                                drawRect(underline, topLeft = Offset(0f, y - 0.5.dp.toPx()), size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx()))
+                            },
+                        style = sys(10.5, FontWeight.Medium, tracking = 0.8).copy(fontFamily = FontFamily.Monospace),
+                        color = DS.Colors.Login.fg1,
+                        maxLines = 1,
+                    )
+                }
             }
             LoginField(icon = "lock", focused = focusedField == Field.password) {
                 LoginTextField(
@@ -562,8 +586,8 @@ private fun TrialSection(modifier: Modifier, limit: Int, onXray: () -> Unit, onS
         ) {
             Text("ÜCRETSİZ DENEYİN", style = sys(11, FontWeight.Bold, tracking = 1.6), color = DS.Colors.Login.fg1, maxLines = 1)
             Text(
-                "· giriş yapmadan, her biri $limit hak", style = sys(12), color = DS.Colors.Login.fg2,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                "· giriş yapmadan, her biri $limit hak", Modifier.weight(1f, fill = false),
+                style = sys(12), color = DS.Colors.Login.fg2, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
 
@@ -785,6 +809,22 @@ fun LoginBackdrop() {
 @Composable
 private fun LoginViewPreview() {
     PreviewEnv(loggedIn = false) {
+        LoginView(screenReady = false)
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun LoginViewTabletPreview() {
+    PreviewEnv(loggedIn = false, pencere = PencereBilgisi.TABLET_YATAY) {
+        LoginView(screenReady = false)
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 800, heightDp = 1280)
+@Composable
+private fun LoginViewTabletPortraitPreview() {
+    PreviewEnv(loggedIn = false, pencere = PencereBilgisi.TABLET_DIKEY) {
         LoginView(screenReady = false)
     }
 }

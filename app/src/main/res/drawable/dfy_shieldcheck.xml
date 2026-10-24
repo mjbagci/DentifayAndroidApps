@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/ShieldCheck.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 18.709 3.495 C 16.817 2.554 14.5 2 12 2 s -4.816 .554 -6.709 1.495 c -.928 .462 -1.392 .693 -1.841 1.419 S 3 6.342 3 7.748 v 3.49 c 0 5.683 4.542 8.842 7.173 10.196 c .734 .377 1.1 .566 1.827 .566 s 1.093 -.189 1.827 -.566 C 16.457 20.08 21 16.92 21 11.237 V 7.748 c 0 -1.406 0 -2.108 -.45 -2.834 s -.913 -.957 -1.841 -1.419"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 9 11.5 s 1.408 .252 2 2 c 0 0 1.5 -3 4 -4"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

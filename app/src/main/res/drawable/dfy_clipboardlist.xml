@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/ClipboardList.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 14.496 2 h -5 a 1.5 1.5 0 0 0 0 3 h 5 a 1.5 1.5 0 0 0 0 -3 m -6.5 13 h 3.429 m -3.429 -4 h 8"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 15.996 3.5 c 1.554 .047 2.48 .22 3.121 .862 c .88 .878 .88 2.293 .88 5.12 V 16 c 0 2.828 0 4.242 -.88 5.121 c -.878 .879 -2.293 .879 -5.12 .879 h -4 c -2.83 0 -4.244 0 -5.122 -.879 S 3.996 18.828 3.996 16 V 9.483 c 0 -2.828 0 -4.243 .879 -5.121 c .641 -.642 1.568 -.815 3.121 -.862"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

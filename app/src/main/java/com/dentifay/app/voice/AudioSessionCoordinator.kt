@@ -1,3 +1,5 @@
+@file:Suppress("EnumEntryName")
+
 package com.dentifay.app.voice
 
 import android.content.Context
@@ -6,7 +8,6 @@ import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
@@ -14,36 +15,36 @@ import com.dentifay.app.core.Prefs
 import com.dentifay.app.theme.ActivityHolder
 
 /**
- * Uygulamadaki **TÜM** ses oturumu (AudioManager: odak, iletişim modu, rota) çağrılarının tek sahibi.
- * Başka hiçbir dosya `AudioManager` modunu / odağını değiştirmemelidir.
+ * Uygulamadaki **TÜM** ses oturumu (AudioManager: odak, rota gözlemi) çağrılarının tek sahibi.
+ * Başka hiçbir dosya `AudioManager` odağını değiştirmemelidir.
  *
- * Eski mimaride iki ayrı tüketici aynı süreç-geneli oturumu paylaşıyor ve biri gecikmeli
+ * Eski mimaride iki ayrı dikte yöneticisi aynı süreç-geneli oturumu paylaşıyor ve biri gecikmeli
  * kapatma planlayıp diğerinin canlı kaydını öldürüyordu. Buradaki tek-sahip + refcount modeli
  * o yarışı fiziksel olarak imkânsız kılar: oturum yalnız SON tüketici çıkınca kapanır ve
  * **hiçbir zaman gecikmeli deaktivasyon yazılmaz.**
  *
- * Android karşılıkları: `.duckOthers` → `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`; `.voiceChat`
- * (AEC) → `MODE_IN_COMMUNICATION`; `.defaultToSpeaker` → hoparlöre yönlendirme;
- * `isIdleTimerDisabled` → `FLAG_KEEP_SCREEN_ON`.
+ * Android karşılıkları: `.duckOthers` → `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`;
+ * `isIdleTimerDisabled` → `FLAG_KEEP_SCREEN_ON`. Yankı giderme (AEC/NS/AGC) kayıt tarafında
+ * `VoiceAudioGraph`in efektleridir; sistem ses kipi (iletişim kipi) DEĞİŞTİRİLMEZ — dikte ve
+ * Tedavi Planı'nın özet okuması aynı anda çalmaz.
  */
 object AudioSessionCoordinator {
 
-    enum class Consumer { dictation, conversation }
+    enum class Consumer { dictation }
     enum class AudioRoute { builtIn, wired, bluetoothHFP, bluetoothA2DP }
     /** `AVAudioSession.RouteChangeReason` karşılığı (kullanılan alt küme). */
     enum class RouteChangeReason { newDeviceAvailable, oldDeviceUnavailable, unknown }
 
     private val consumers = mutableSetOf<Consumer>()
     private var observersInstalled = false
-    private val main = Handler(Looper.getMainLooper())
+    /** Tembel: nesneye yalnız dokunmak (ör. birim testinde) Android ana döngüsünü istemez. */
+    private val main: Handler by lazy { Handler(Looper.getMainLooper()) }
 
     private var focusRequest: AudioFocusRequest? = null
-    private var previousMode: Int? = null
-    private var previousSpeaker: Boolean? = null
     /** Geçici odak kaybından sonra geri gelince "devam et" denir. */
     private var transientLoss = false
 
-    /** Kesinti / rota / yapılandırma bildirimleri — üst katman (LiveVoiceSession) abone olur. */
+    /** Kesinti / rota / yapılandırma bildirimleri — üst katman (`DictationSession`) abone olur. */
     var onInterruptionBegan: (() -> Unit)? = null
     var onInterruptionEnded: ((shouldResume: Boolean) -> Unit)? = null
     var onRouteChanged: ((reason: RouteChangeReason, route: AudioRoute) -> Unit)? = null
@@ -54,39 +55,36 @@ object AudioSessionCoordinator {
     private val audioManager: AudioManager?
         get() = Prefs.appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
-    /** Oturumu kurar. İdempotent. İkinci tüketici için hiçbir şey yapmaz (konuşma modu hariç). */
+    /** Oturumu kurar. İdempotent. İkinci tüketici için hiçbir şey yapmaz. */
     fun acquire(consumer: Consumer) {
         installObserversIfNeeded()
         val wasEmpty = consumers.isEmpty()
-        val hadConversation = Consumer.conversation in consumers
         consumers.add(consumer)
-        val am = audioManager ?: throw IllegalStateException("AudioManager yok")
-
-        if (wasEmpty) {
-            val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(attrs)
-                .setOnAudioFocusChangeListener({ change -> handleFocusChange(change) }, main)
-                .build()
-            focusRequest = req
-            am.requestAudioFocus(req)
-            setKeepScreenOn(true)
+        if (!wasEmpty) return
+        val am = audioManager
+        if (am == null) {
+            consumers.remove(consumer)
+            throw IllegalStateException("AudioManager yok")
         }
-        // Konuşma modu: AEC/AGC/NS'i MÜMKÜN kılan iletişim modu + hoparlör (kulak hoparlörü değil).
-        if (consumer == Consumer.conversation && !hadConversation) enterCommunicationMode(am)
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(attrs)
+            .setOnAudioFocusChangeListener({ change -> handleFocusChange(change) }, main)
+            .build()
+        focusRequest = req
+        am.requestAudioFocus(req)
+        setKeepScreenOn(true)
     }
 
     /** Tüketiciyi bırakır. SON tüketici çıkınca oturumu kapatır.
      *  ⚠️ GECİKMELİ DEAKTİVASYON ASLA YAZILMAZ. */
     fun release(consumer: Consumer) {
         if (!consumers.remove(consumer)) return
-        val am = audioManager
-        if (consumer == Consumer.conversation && am != null) exitCommunicationMode(am)
         if (consumers.isNotEmpty()) return
-        focusRequest?.let { am?.abandonAudioFocusRequest(it) }
+        focusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
         focusRequest = null
         transientLoss = false
         setKeepScreenOn(false)
@@ -96,47 +94,6 @@ object AudioSessionCoordinator {
         get() = audioManager?.let { map(it) } ?: AudioRoute.builtIn
 
     // MARK: - Private
-
-    private fun enterCommunicationMode(am: AudioManager) {
-        if (previousMode == null) previousMode = am.mode
-        runCatching { am.mode = AudioManager.MODE_IN_COMMUNICATION }
-        applySpeakerRoute(am)
-    }
-
-    private fun exitCommunicationMode(am: AudioManager) {
-        if (Build.VERSION.SDK_INT >= 31) {
-            runCatching { am.clearCommunicationDevice() }
-        } else {
-            @Suppress("DEPRECATION")
-            previousSpeaker?.let { runCatching { am.isSpeakerphoneOn = it } }
-        }
-        previousSpeaker = null
-        previousMode?.let { runCatching { am.mode = it } }
-        previousMode = null
-    }
-
-    /** `.defaultToSpeaker`: kulaklık / Bluetooth yoksa hoparlör. */
-    private fun applySpeakerRoute(am: AudioManager) {
-        val external = map(am) != AudioRoute.builtIn
-        if (Build.VERSION.SDK_INT >= 31) {
-            val devices = am.availableCommunicationDevices
-            val target = if (external) {
-                devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO } ?: devices.firstOrNull {
-                    it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                        it.type == AudioDeviceInfo.TYPE_USB_HEADSET
-                }
-            } else {
-                devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-            }
-            if (target != null) runCatching { am.setCommunicationDevice(target) }
-        } else {
-            @Suppress("DEPRECATION")
-            run {
-                if (previousSpeaker == null) previousSpeaker = am.isSpeakerphoneOn
-                runCatching { am.isSpeakerphoneOn = !external }
-            }
-        }
-    }
 
     private fun map(am: AudioManager): AudioRoute {
         // Çıkış portu AEC ve endpoint kararları için belirleyicidir.
@@ -191,10 +148,8 @@ object AudioSessionCoordinator {
 
     private fun handleRouteChange(reason: RouteChangeReason) {
         if (!isActive) return
-        val am = audioManager
-        if (am != null && Consumer.conversation in consumers) applySpeakerRoute(am)
         onRouteChanged?.invoke(reason, currentRoute)
-        // iOS'ta rota değişimi motor yapılandırma değişimini de tetikler.
+        // iOS'ta rota değişimi motor yapılandırma değişimini de tetikler (`.AVAudioEngineConfigurationChange`).
         onConfigurationChange?.invoke()
     }
 

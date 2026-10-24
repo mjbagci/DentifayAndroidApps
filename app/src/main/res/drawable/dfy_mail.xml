@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Mail.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="m 2 6 l 6.913 3.917 c 2.549 1.444 3.625 1.444 6.174 0 L 22 6"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 2.016 13.476 c .065 3.065 .098 4.598 1.229 5.733 c 1.131 1.136 2.705 1.175 5.854 1.254 c 1.94 .05 3.862 .05 5.802 0 c 3.149 -.079 4.723 -.118 5.854 -1.254 c 1.131 -1.135 1.164 -2.668 1.23 -5.733 c .02 -.986 .02 -1.966 0 -2.952 c -.066 -3.065 -.099 -4.598 -1.23 -5.733 c -1.131 -1.136 -2.705 -1.175 -5.854 -1.254 a 115 115 0 0 0 -5.802 0 c -3.149 .079 -4.723 .118 -5.854 1.254 c -1.131 1.135 -1.164 2.668 -1.23 5.733 a 69 69 0 0 0 0 2.952 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineJoin="round" />
+</vector>

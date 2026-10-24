@@ -1,18 +1,18 @@
 package com.dentifay.app.credit
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -29,55 +29,48 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.dentifay.app.core.AppConfig
+import com.dentifay.app.BuildConfig
+import com.dentifay.app.auth.LocalAuthManager
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.DfyIcon
 import com.dentifay.app.theme.DfySheet
-import com.dentifay.app.theme.Haptics
-import com.dentifay.app.theme.Motion
 import com.dentifay.app.theme.glassCard
 import com.dentifay.app.theme.monoDigits
 import com.dentifay.app.theme.pressable
 import com.dentifay.app.theme.sys
-import com.dentifay.app.theme.upperTr
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.ui.icerikGenisligi
 import kotlinx.coroutines.launch
 
 /**
- * Uygulama içi "Yapay Zeka Kredileri" — kalan kredi, kademe fiyatları ve
- * kredi paketi satın alma. Gülüş simülasyonunda, asistan sohbetinde, sesli modda ve
- * Tedavi Planı'nda kredi bitince (402 · `CreditRequired`), Ayarlar'dan ve AI Hub'dan
- * açılır. Ödeme uygulamada alınmaz: paket bedeli kliniğin o ayki
- * Dentifay faturasına yazılır (yalnız klinik sahibi / yöneticisi satın alır).
+ * "Krediler" — SALT OKUR bakiye ekranı (MOBIL_IS_EMRI M-E1.7.6): kullanılabilir kredi, bu ay ve gülüş simülasyonu
+ * kalite fiyatları. Satın alma burada YOK — tek satın alma yeri Kredi Yönetimi › Kredi Yükle'dir.
+ * 402 girişlerinde (`reason`) üstte gerekçe; altta Kredi Yönetimi görünürse "Kredi Yönetimi'ni aç", değilse Ek MO.23b.
  *
- * `reason`: ekranın neden açıldığı (ör. "Bu tasarım 4 kredi, kalan 2").
+ * `onPurchased`: sözleşme uyumu için korunur; satın alma artık bu ekranda olmadığından çağrılmaz.
  */
 @Composable
 fun SmileCreditsView(
     reason: String? = null,
-    onPurchased: (() -> Unit)? = null,
+    @Suppress("UNUSED_PARAMETER") onPurchased: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val store = SmileCreditsStore.shared
+    val caps = LocalAuthManager.current.yetenekler
     val scope = rememberCoroutineScope()
-    var confirmPack by remember { mutableStateOf<SmileCreditPack?>(null) }
-    var purchased by remember { mutableStateOf<SmilePurchaseResult?>(null) }
+    var yonetim by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { store.refresh() }
-
-    /** `CreditPurchaseSheet` koşulları onaylatıp satın aldıktan SONRA. */
-    fun purchaseDone(r: SmilePurchaseResult) {
-        purchased = r
-        Haptics.success()
-        onPurchased?.invoke()
-    }
 
     Column(Modifier.fillMaxSize().background(DS.Colors.background)) {
         CreditNavBar("Krediler", trailing = { CreditBarButton("Kapat") { onDismiss() } })
@@ -86,191 +79,137 @@ fun SmileCreditsView(
             onRefresh = {
                 refreshing = true
                 scope.launch {
-                    store.refresh()
-                    refreshing = false
+                    try {
+                        store.refresh()
+                    } finally {
+                        refreshing = false
+                    }
                 }
             },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(20.dp)
-                    .navigationBarsPadding(),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
-            ) {
-                if (reason != null) {
-                    CreditIconLabel(
-                        reason, "exclamationmark.circle.fill",
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(DS.Colors.orange400.copy(alpha = 0.12f))
-                            .padding(12.dp),
-                        size = 13f, weight = FontWeight.Medium, color = DS.Colors.orange400,
-                    )
-                }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Column(
+                    Modifier
+                        .icerikGenisligi(720.dp)
+                        .padding(20.dp)
+                        .navigationBarsPadding(),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    if (reason != null) {
+                        CreditIconLabel(
+                            reason, "exclamationmark.circle.fill",
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(DS.Colors.orange400.copy(alpha = 0.12f))
+                                .padding(12.dp),
+                            size = 13f, weight = FontWeight.Medium, color = DS.Colors.orange400,
+                        )
+                    }
 
-                if (!store.isMetered) {
-                    // Yalnız gülüş simülasyonu doğrudan gidiyor; asistan ve sesli mod bu
-                    // derlemede de sunucuda krediyle çalışır → cüzdan ve paketler yine çizilir.
-                    SmileInfoCard(
-                        icon = "hammer.fill",
-                        title = "Geliştirici modu",
-                        text = "Bu derlemede gülüş simülasyonu doğrudan görüntü servisine gidiyor (cihazda anahtar var); simülasyon için kredi düşülmüyor. Asistan ve sesli mod yine kliniğinizin kredisini kullanır.",
-                    )
-                }
-                val wallet = store.wallet
-                val error = store.errorMessage
-                if (wallet != null) {
-                    SmileBalanceCard(wallet)
-                    wallet.myLimit?.let { SmileLimitCard(it) }
-                    AnimatedVisibility(
-                        visible = purchased != null,
-                        enter = fadeIn(Motion.spring(0.4, 0.85)) + expandVertically(Motion.spring(0.4, 0.85)),
-                    ) {
-                        purchased?.let { r ->
-                            SmileInfoCard(
-                                icon = "checkmark.seal.fill",
-                                title = "${SmileCreditFormat.credits(r.creditsGranted)} kredi eklendi",
-                                text = "${SmileCreditFormat.lira(r.priceTL)} bu ayın Dentifay faturanıza yansıyacak.",
-                                tint = DS.Colors.tertiaryContainer,
+                    // Yalnız geliştirme derlemesi: gülüş simülasyonu doğrudan geliştirme hesabıyla çalışır.
+                    if (BuildConfig.DEBUG && !store.isMetered) {
+                        SmileInfoCard(
+                            icon = "hammer.fill",
+                            title = "Geliştirici modu",
+                            text = "Geliştirme anahtarı tanımlı: gülüş simülasyonu doğrudan geliştirme hesabıyla çalışır, kredi düşülmez.",
+                        )
+                    }
+
+                    val wallet = store.wallet
+                    val error = store.errorMessage
+                    if (wallet != null) {
+                        // Geniş pencerede bakiye ve kalite fiyatları yan yana (eşit yükseklik).
+                        BoxWithConstraints(Modifier.fillMaxWidth()) {
+                            if (maxWidth >= 600.dp) {
+                                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    SmileBalanceCard(wallet, Modifier.weight(1f).fillMaxHeight())
+                                    SmileTiersCard(wallet, Modifier.weight(1f).fillMaxHeight())
+                                }
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                                    SmileBalanceCard(wallet)
+                                    SmileTiersCard(wallet)
+                                }
+                            }
+                        }
+                    } else if (error != null) {
+                        SmileInfoCard(icon = "wifi.exclamationmark", title = "Kredi bilgileri yüklenemedi.", text = error)
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp)
+                                .semantics { role = Role.Button }
+                                .pressable { scope.launch { store.refresh() } }
+                                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CreditIconLabel("Tekrar dene", "arrow.clockwise", size = 14f, weight = FontWeight.SemiBold, verticalAlignment = Alignment.CenterVertically)
+                        }
+                    } else if (!store.yetkisiz) {   // kodsuz 403 → parça çizilmez (M-E7.5)
+                        Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
+                            CreditSpinner(color = DS.Colors.cyan400)
+                        }
+                    }
+
+                    if (KrediErisimi.yonetimGorur(caps)) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 50.dp)
+                                .semantics { role = Role.Button }
+                                .pressable { yonetim = true }
+                                .clip(RoundedCornerShape(50))
+                                .background(DS.Gradients.primaryGradient),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CreditIconLabel(
+                                "Kredi Yönetimi'ni aç", "chart.bar.doc.horizontal", Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                size = 15f, weight = FontWeight.SemiBold, color = Color.White, verticalAlignment = Alignment.CenterVertically,
                             )
                         }
-                    }
-                    SmileTiersCard(wallet)
-                    // Kredi paketleri — mağaza derlemesinde yok; krediler web panelinden alınır.
-                    if (AppConfig.inAppPurchase) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("KREDİ PAKETLERİ", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
-                            wallet.purchaseBlockedMessage?.let { blocked ->
-                                SmileInfoCard(icon = "person.badge.key.fill", title = "Satın alma yetkisi", text = blocked)
-                            }
-                            wallet.packs.forEach { pack ->
-                                SmilePackCard(pack, enabled = wallet.canPurchase, busy = store.isPurchasing) { confirmPack = pack }
-                            }
-                        }
-                    }
-                } else if (error != null) {
-                    SmileInfoCard(icon = "wifi.exclamationmark", title = "Krediler yüklenemedi", text = error)
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .pressable { scope.launch { store.refresh() } }
-                            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CreditIconLabel("Tekrar dene", "arrow.clockwise", size = 14f, weight = FontWeight.SemiBold, verticalAlignment = Alignment.CenterVertically)
-                    }
-                } else {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
-                        CreditSpinner(color = DS.Colors.cyan400)
+                    } else {
+                        Text("Ek kredi için kliniğinizin Sahibine haber verin.", style = sys(12), color = DS.Colors.onSurfaceVariant)
                     }
                 }
-
-                CreditIconLabel(
-                    (if (AppConfig.inAppPurchase) "Ödeme uygulamada alınmaz; paket bedeli ay sonunda kliniğinizin Dentifay faturasına yansır. " else "") +
-                        "Başarısız simülasyonun kredisi otomatik iade edilir, otomatik yerleşim düzeltmesi ücretsizdir.",
-                    "doc.text.fill", size = 11f, color = DS.Colors.onSurfaceVariant,
-                )
             }
         }
     }
 
-    // Satın alma: Kredi Satın Alma Koşulları okunup onaylanmadan YAPILMAZ (sunucu 428 verir).
-    // Hatalar pencerenin içinde gösterilir. Mağaza derlemesinde pencere hiç yok (`AppConfig.inAppPurchase`).
-    if (AppConfig.inAppPurchase) {
-        DfySheet(isPresented = confirmPack != null, onDismiss = { confirmPack = null }, containerColor = DS.Colors.background) { dismiss ->
-            confirmPack?.let { pack ->
-                CreditPurchaseSheet(pack = pack, onPurchased = { r -> purchaseDone(r) }, onDismiss = dismiss)
-            }
-        }
+    DfySheet(isPresented = yonetim, onDismiss = { yonetim = false }, containerColor = DS.Colors.background) { dismiss ->
+        CreditCenterView(
+            onDismiss = dismiss,
+            baslangic = if (KrediErisimi.yukleBolumu(caps)) CreditCenterSection.topUp else CreditCenterSection.overview,
+        )
     }
 }
 
 // MARK: - Kartlar
 
 @Composable
-private fun SmileBalanceCard(w: SmileWallet) {
-    Column(Modifier.fillMaxWidth().glassCard(22.dp).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CreditNumericText(SmileCreditFormat.credits(w.availableCredits), sys(44, FontWeight.Bold), DS.Colors.onSurface)
-            Text("kredi", Modifier.padding(bottom = 7.dp), style = sys(16, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
-            Spacer(Modifier.weight(1f))
-            if (w.isOnFreeCredits) {
-                Text(
-                    "ÜCRETSİZ",
-                    Modifier
-                        .padding(bottom = 9.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(DS.Colors.tertiaryContainer)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = sys(10, FontWeight.Bold, tracking = 1), color = DS.Colors.onPrimary,
-                )
-            }
-        }
-        if (w.freeGrantCredits > 0) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row {
-                    Text("Ücretsiz kredi", style = sys(12, FontWeight.Medium), color = DS.Colors.onSurfaceVariant)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${SmileCreditFormat.credits(w.freeRemainingCredits)} / ${SmileCreditFormat.credits(w.freeGrantCredits)}",
-                        style = sys(12, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface,
-                    )
-                }
-                CreditProgressBar(w.freeRemainingCredits / maxOf(w.freeGrantCredits, 1.0), DS.Colors.tertiaryContainer)
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SmileStatPill("Satın alınan", SmileCreditFormat.credits(w.balanceCredits), Modifier.weight(1f))
-            w.thisMonth?.let { m ->
-                SmileStatPill("Bu ay kullanılan", SmileCreditFormat.credits(m.usedCredits), Modifier.weight(1f))
-                if (m.purchasedTL > 0) SmileStatPill("Bu ay faturaya", SmileCreditFormat.lira(m.purchasedTL), Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-/** Kişinin aylık kredi limiti (Kredi Yönetimi › Kişiler). Kredi satın almak bu limiti AŞMAZ. */
-@Composable
-private fun SmileLimitCard(limit: SmileWallet.MyLimit) {
-    Column(Modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("AYLIK KREDİ LİMİTİNİZ", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
-            Spacer(Modifier.weight(1f))
-            Text(
-                "Kalan ${SmileCreditFormat.credits(limit.remainingCredits)} kredi",
-                style = sys(12, FontWeight.SemiBold),
-                color = if (limit.remainingCredits > 0) DS.Colors.tertiaryContainer else DS.Colors.orange400,
+private fun SmileBalanceCard(w: SmileWallet, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().glassCard(22.dp).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Kullanılabilir kredi", style = sys(12, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CreditNumericText(
+                SmileCreditFormat.credits(w.availableCredits), sys(44, FontWeight.Bold), DS.Colors.onSurface,
+                Modifier.weight(1f, fill = false).alignByBaseline(),
             )
-        }
-        limit.limits.forEach { line ->
-            val pct = if (line.limitCredits <= 0) 1.0 else minOf(1.0, maxOf(0.0, line.usedCredits) / line.limitCredits)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row {
-                    Text(
-                        if (line.scope == "*") "Aylık toplam" else CreditLabels.feature(line.scope),
-                        style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${SmileCreditFormat.credits(line.usedCredits)} / ${SmileCreditFormat.credits(line.limitCredits)}",
-                        style = sys(12, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurface,
-                    )
-                }
-                CreditProgressBar(
-                    pct,
-                    if (pct >= 1) DS.Colors.error else if (pct >= 0.8) DS.Colors.orange400 else DS.Colors.tertiaryContainer,
-                )
-            }
+            Text("kredi", Modifier.alignByBaseline(), style = sys(16, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
         }
         Text(
-            "Limit kliniğin takvim ayıyla sayılır ve ay başında sıfırlanır; değiştirmek için klinik sahibine başvurun.",
-            style = sys(11), color = DS.Colors.onSurfaceVariant,
+            "Ücretsiz ${SmileCreditFormat.credits(w.freeRemainingCredits)} · satın alınmış ${SmileCreditFormat.credits(w.balanceCredits)}",
+            style = sys(12), color = DS.Colors.onSurfaceVariant,
         )
+        w.thisMonth?.let { m ->
+            Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SmileStatPill("Bu ay kullanılan", SmileCreditFormat.credits(m.usedCredits), Modifier.weight(1f).fillMaxHeight())
+                // ₺ yalnız sunucu verirse (hekim ₺ görmez) ve ödenecek bir tutar varsa.
+                val tl = m.purchasedTL
+                if (tl != null && tl > 0) SmileStatPill("Bu ay faturaya", SmileCreditFormat.lira(tl), Modifier.weight(1f).fillMaxHeight())
+            }
+        }
     }
 }
 
@@ -284,81 +223,25 @@ private fun SmileStatPill(title: String, value: String, modifier: Modifier = Mod
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(title, style = sys(10, FontWeight.SemiBold), color = DS.Colors.outline, maxLines = 1)
-        Text(value, style = sys(14, FontWeight.Bold).monoDigits(), color = DS.Colors.onSurface, maxLines = 1)
+        SigdirMetin(value, sys(14, FontWeight.Bold).monoDigits(), DS.Colors.onSurface)
     }
 }
 
+/** Ek MO.21n — gülüş simülasyonu kalite fiyatları (sunucunun `tiers`ı; sayı yoksa "—"). */
 @Composable
-private fun SmileTiersCard(w: SmileWallet) {
-    Column(Modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun SmileTiersCard(w: SmileWallet, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().glassCard(20.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("GÜLÜŞ SİMÜLASYONU · KALİTE BAŞINA", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
         w.tiers.forEach { tier ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(tier.label, style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
-                Spacer(Modifier.weight(1f))
-                Text("${SmileCreditFormat.credits(tier.credits)} kredi", style = sys(13, FontWeight.SemiBold).monoDigits(), color = DS.Colors.cyan400)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(tier.label, Modifier.weight(1f), style = sys(14, FontWeight.Medium), color = DS.Colors.onSurface)
+                Text(GulusBedeli.kart(tier.credits), style = sys(13, FontWeight.SemiBold).monoDigits(), color = DS.Colors.cyan400)
             }
         }
         CreditDivider(0.08f)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Otomatik yerleşim düzeltme", style = sys(13), color = DS.Colors.onSurfaceVariant)
-            Spacer(Modifier.weight(1f))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Otomatik yerleşim düzeltmesi", Modifier.weight(1f), style = sys(13), color = DS.Colors.onSurfaceVariant)
             Text("Ücretsiz", style = sys(13, FontWeight.SemiBold), color = DS.Colors.tertiaryContainer)
-        }
-    }
-}
-
-@Composable
-private fun SmilePackCard(pack: SmileCreditPack, enabled: Boolean, busy: Boolean, onBuy: () -> Unit) {
-    val highlight = pack.popular == true
-    val shape = RoundedCornerShape(20.dp)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .glassCard(20.dp)
-            .border(1.2.dp, if (highlight) DS.Colors.cyan400.copy(alpha = 0.7f) else Color.Transparent, shape)
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${SmileCreditFormat.credits(pack.credits)} kredi", style = sys(17, FontWeight.Bold), color = DS.Colors.onSurface)
-                pack.badge?.let { badge ->
-                    Text(
-                        badge.upperTr(),
-                        Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(if (highlight) DS.Colors.cyan400 else DS.Colors.cyan400.copy(alpha = 0.12f))
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
-                        style = sys(9, FontWeight.Bold, tracking = 0.8),
-                        color = if (highlight) DS.Colors.onPrimary else DS.Colors.cyan400,
-                    )
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                pack.unitPriceTL?.let { unit ->
-                    Text("kredi başı ${SmileCreditFormat.lira(unit)}", style = sys(11), color = DS.Colors.onSurfaceVariant)
-                }
-                val save = pack.savePct
-                if (save != null && save > 0) {
-                    Text("%$save tasarruf", style = sys(11, FontWeight.SemiBold), color = DS.Colors.tertiaryContainer)
-                }
-            }
-        }
-        Column(
-            Modifier
-                .alpha(if (enabled) 1f else 0.4f)
-                .pressable(enabled = enabled && !busy, onClick = onBuy)
-                .height(48.dp)
-                .clip(RoundedCornerShape(50))
-                .background(DS.Gradients.primaryGradient)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(SmileCreditFormat.lira(pack.priceTL), style = sys(15, FontWeight.Bold), color = Color.White)
-            Text("Satın al", Modifier.alpha(0.85f), style = sys(10, FontWeight.SemiBold), color = Color.White)
         }
     }
 }
@@ -382,7 +265,16 @@ private fun SmileInfoCard(icon: String, title: String, text: String, tint: Color
 @Composable
 private fun SmileCreditsViewPreview() {
     PreviewEnv {
-        remember { SmileCreditsStore.shared.previewFill(CreditPreviewData.wallet); 0 }
-        SmileCreditsView(reason = "Bu tasarım 12 kredi, kalan 4.", onDismiss = {})
+        remember { SmileCreditsStore.shared.ornekYukle(CreditPreviewData.wallet); 0 }
+        SmileCreditsView(reason = "Bu tasarım için yeterli krediniz yok.", onDismiss = {})
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun SmileCreditsViewTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) {
+        remember { SmileCreditsStore.shared.ornekYukle(CreditPreviewData.wallet); 0 }
+        SmileCreditsView(onDismiss = {})
     }
 }

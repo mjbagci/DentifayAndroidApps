@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/Lock.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 2 16 C 2 13.1716 2 11.7574 2.87868 10.8787 C 3.75736 10 5.17157 10 8 10 H 16 C 18.8284 10 20.2426 10 21.1213 10.8787 C 22 11.7574 22 13.1716 22 16 C 22 18.8284 22 20.2426 21.1213 21.1213 C 20.2426 22 18.8284 22 16 22 H 8 C 5.17157 22 3.75736 22 2.87868 21.1213 C 2 20.2426 2 18.8284 2 16 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 12 14 C 13.1046 14 14 14.8954 14 16 C 14 17.1046 13.1046 18 12 18 C 10.8954 18 10 17.1046 10 16 C 10 14.8954 10.8954 14 12 14 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M 12 1.25 C 15.7279 1.25 18.75 4.27208 18.75 8 V 10.0547 C 18.3135 10.0221 17.8174 10.0092 17.25 10.0039 V 8 C 17.25 5.10051 14.8995 2.75 12 2.75 C 9.10051 2.75 6.75 5.10051 6.75 8 V 10.0039 C 6.18264 10.0092 5.68651 10.0221 5.25 10.0547 V 8 C 5.25 4.27208 8.27208 1.25 12 1.25 Z"
+        android:fillColor="#FF000000" />
+</vector>

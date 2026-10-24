@@ -15,8 +15,8 @@ android {
         applicationId = "com.dentifay.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     // Yayın imzası: android/keystore.properties + dentifay-release.jks (git'e girmez; yedekleyin!).
@@ -68,11 +68,15 @@ android {
             "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
             "-opt-in=androidx.compose.foundation.layout.ExperimentalLayoutApi",
             "-opt-in=androidx.compose.animation.ExperimentalAnimationApi",
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
         )
     }
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -100,7 +104,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
-    implementation("io.coil-kt:coil-svg:2.7.0")
 
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.security:security-crypto:1.0.0")
@@ -114,4 +117,8 @@ dependencies {
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.mlkit:face-detection:16.1.7")
+
+    // Saf mantık birim testleri (Swift DentAISoftTests karşılıkları) — `./gradlew :app:testDebugUnitTest`
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Pill.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 20.193 12.999 a 6 6 0 1 1 -10.392 6 m 10.392 -6 a 6 6 0 0 0 -10.392 6 m 10.392 -6 l -10.392 6"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5" />
+    <path
+        android:pathData="m 10.043 5.542 l 5.085 -3.005 c 1.872 -1.106 4.266 -.45 5.347 1.467 A 4.08 4.08 0 0 1 20 8.682 m -9.957 -3.14 L 4.958 8.547 c -1.872 1.106 -2.514 3.556 -1.433 5.472 A 3.9 3.9 0 0 0 6.5 16 m 3.543 -10.458 L 11.5 8"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

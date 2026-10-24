@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,23 +28,31 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.dentifay.app.credit.SmileCreditFormat
+import com.dentifay.app.credit.GulusBedeli
+import com.dentifay.app.credit.KrediIpucu
 import com.dentifay.app.credit.SmileCreditsStore
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.DfyIcon
@@ -54,9 +63,12 @@ import com.dentifay.app.theme.glassCard
 import com.dentifay.app.theme.hex
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.pressable
+import com.dentifay.app.theme.monoDigits
 import com.dentifay.app.theme.sys
 import com.dentifay.app.theme.upperTr
+import com.dentifay.app.ui.sutunSayisi
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 // Gülüş simülasyonu · 2. adım (Tasarım): hazır tasarımlar, ince ayar, gelişmiş, alt eylem çubuğu.
@@ -72,7 +84,7 @@ internal fun SmileStepHeader(n: Int, title: String, detail: String) {
                 .border(1.dp, DS.Colors.hairlineStrong, CircleShape),
             contentAlignment = Alignment.Center,
         ) { Text("$n", style = sys(13, FontWeight.Bold), color = Color.White) }
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(title, style = sys(16, FontWeight.Bold), color = DS.Colors.onSurface)
             Text(detail, style = sys(11), color = DS.Colors.onSurfaceVariant)
         }
@@ -81,13 +93,25 @@ internal fun SmileStepHeader(n: Int, title: String, detail: String) {
 
 // MARK: Fotoğraf + gönderilen alan
 
+/**
+ * Fotoğraf + gönderilen alan. `previewMaxHeight`: önizleme pencereye sığsın (yatay tablette sol bölmenin yüksekliği,
+ * telefonda Swift'teki 420).
+ */
 @Composable
-internal fun SmilePhotoSection(vm: SmileSimulationViewModel, onRetakeFrontal: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SmilePhotoSection(
+    vm: SmileSimulationViewModel,
+    onRetakeFrontal: () -> Unit,
+    modifier: Modifier = Modifier,
+    previewMaxHeight: Dp = 420.dp,
+) {
     Column(modifier.fillMaxWidth().glassCard(22.dp).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val image = vm.original
         val region = vm.region
         if (image != null && region != null) {
-            SmileRegionPreview(image = image, region = region, mask = vm.maskPreview, modifier = Modifier.fillMaxWidth())
+            SmileRegionPreview(
+                image = image, region = region, mask = vm.maskPreview,
+                modifier = Modifier.fillMaxWidth(), maxHeight = previewMaxHeight,
+            )
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -133,7 +157,7 @@ private fun SideAngleWarning(onRetake: () -> Unit) {
                 .background(DS.Colors.orange400)
                 .padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center,
-        ) { Text("Karşıdan çek", style = sys(12, FontWeight.Bold), color = Color.White) }
+        ) { Text("Karşıdan çek", style = sys(12, FontWeight.Bold), color = Color.White, maxLines = 1) }
     }
 }
 
@@ -141,19 +165,24 @@ private fun SideAngleWarning(onRetake: () -> Unit) {
 private fun SmileInfoLine(icon: String, text: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
         Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) { DfyIcon(icon, size = 13.dp, tint = DS.Colors.cyan400) }
-        Text(text, style = sys(12), color = DS.Colors.onSurfaceVariant)
+        Text(text, Modifier.weight(1f), style = sys(12), color = DS.Colors.onSurfaceVariant)
     }
 }
 
 // MARK: Hazır tasarımlar (tek seçim)
 
+/** Hazır tasarımlar: telefonda iki sütun (Swift `LazyVGrid` 2 sütun), geniş sütunda üç. */
 @Composable
 internal fun SmilePresetGrid(vm: SmileSimulationViewModel, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SmilePreset.all.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                row.forEach { p -> PresetCard(vm, p, Modifier.weight(1f)) }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val sutun = max(2, sutunSayisi(maxWidth, minHucre = 170.dp, bosluk = 10.dp, enFazla = 3))
+        val satirlar = remember(sutun) { SmilePreset.all.chunked(sutun) }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            satirlar.forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { p -> PresetCard(vm, p, Modifier.weight(1f)) }
+                    repeat(sutun - row.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
         }
     }
@@ -165,13 +194,31 @@ private fun PresetCard(vm: SmileSimulationViewModel, p: SmilePreset, modifier: M
     val spring = Motion.spring<Float>(0.3, 0.8)
     val sel by animateFloatAsState(if (selected) 1f else 0f, spring, label = "preset")
     val shape = RoundedCornerShape(18.dp)
+    val glow = DS.Colors.cyan400.copy(alpha = 0.22f)
     Column(
         modifier
             .pressable { vm.selectPreset(p) }
             .semantics { this.selected = selected }
-            .shadow((10 * sel).dp, shape, ambientColor = DS.Colors.cyan400.copy(alpha = 0.22f), spotColor = DS.Colors.cyan400.copy(alpha = 0.22f))
+            // Animasyon değeri yalnız katman/çizim aşamasında okunur (her karede yeniden kompozisyon yok).
+            .graphicsLayer {
+                shadowElevation = 10.dp.toPx() * sel
+                this.shape = shape
+                clip = false
+                ambientShadowColor = glow
+                spotShadowColor = glow
+            }
             .glassCard(18.dp)
-            .border(1.5.dp, DS.Colors.cyan400.copy(alpha = 0.85f * sel), shape)
+            .drawWithContent {
+                drawContent()
+                val a = 0.85f * sel
+                if (a > 0.01f) {
+                    val w = 1.5.dp.toPx()
+                    drawRoundRect(
+                        DS.Colors.cyan400.copy(alpha = a), topLeft = Offset(w / 2, w / 2), size = Size(size.width - w, size.height - w),
+                        cornerRadius = CornerRadius(18.dp.toPx() - w / 2), style = Stroke(w),
+                    )
+                }
+            }
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -191,16 +238,14 @@ private fun PresetCard(vm: SmileSimulationViewModel, p: SmilePreset, modifier: M
         }
         Text(p.title, style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
         // `.lineLimit(2, reservesSpace: true)`
-        Text(p.subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 2, minLines = 2)
+        Text(p.subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(10.dp).clip(CircleShape).background(hex(p.design.shade.swatchHex))
                     .border(0.5.dp, Color.White.copy(alpha = 0.3f), CircleShape)
             )
-            Text(p.design.shade.title, style = sys(10, FontWeight.SemiBold), color = DS.Colors.outline)
-            if (p.design.form != ToothForm.natural) {
-                Text("· ${p.design.form.title}", style = sys(10, FontWeight.SemiBold), color = DS.Colors.outline)
-            }
+            val etiket = if (p.design.form != ToothForm.natural) "${p.design.shade.title} · ${p.design.form.title}" else p.design.shade.title
+            Text(etiket, style = sys(10, FontWeight.SemiBold), color = DS.Colors.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -221,8 +266,10 @@ internal fun SmileTuningSection(vm: SmileSimulationViewModel, modifier: Modifier
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             DfyIcon(vm.preset?.icon ?: "slider.horizontal.3", tint = DS.Colors.cyan400)
-            Text(vm.designTitle, style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
-            Spacer(Modifier.weight(1f))
+            Text(
+                vm.designTitle, Modifier.weight(1f), style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
             if (custom) {
                 Text(
                     "ÖZEL",
@@ -266,10 +313,15 @@ internal fun SmileTuningSection(vm: SmileSimulationViewModel, modifier: Modifier
 @Composable
 private fun TuningLabel(title: String, value: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = sys(13, FontWeight.SemiBold), color = DS.Colors.onSurface)
-        Spacer(Modifier.weight(1f))
-        Crossfade(value, animationSpec = Motion.easeInOut(200), label = "tuningValue") {
-            Text(it, style = sys(12, FontWeight.Medium), color = DS.Colors.cyan400)
+        Text(title, style = sys(13, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1)
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            Crossfade(value, animationSpec = Motion.easeInOut(200), label = "tuningValue") {
+                Text(
+                    it, style = sys(12, FontWeight.Medium), color = DS.Colors.cyan400,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
+                )
+            }
         }
     }
 }
@@ -281,6 +333,7 @@ private fun ShadeSwatch(vm: SmileSimulationViewModel, s: ToothShade, modifier: M
     val scale by animateFloatAsState(if (selected) 1.08f else 1f, spring, label = "swatchScale")
     val ring by animateDpAsState(if (selected) 3.dp else 1.dp, Motion.spring(0.3, 0.8), label = "swatchRing")
     val ringColor by animateColorAsState(if (selected) DS.Colors.cyan400 else Color.White.copy(alpha = 0.25f), Motion.spring(0.3, 0.8), label = "swatchColor")
+    val swatch = remember(s) { hex(s.swatchHex) }
     Column(
         modifier
             .plainClickable {
@@ -295,15 +348,20 @@ private fun ShadeSwatch(vm: SmileSimulationViewModel, s: ToothShade, modifier: M
         Box(
             Modifier
                 .size(34.dp)
-                .scale(scale)
+                // Ölçek, halka kalınlığı ve rengi yalnız katman/çizimde okunur.
+                .graphicsLayer { scaleX = scale; scaleY = scale }
                 .clip(CircleShape)
-                .background(hex(s.swatchHex))
-                .border(ring, ringColor, CircleShape),
+                .background(swatch)
+                .drawWithContent {
+                    drawContent()
+                    val w = ring.toPx()
+                    drawCircle(ringColor, radius = size.minDimension / 2 - w / 2, style = Stroke(w))
+                },
             contentAlignment = Alignment.Center,
         ) {
             if (s == ToothShade.keep) DfyIcon("equal", size = 12.dp, tint = Color.Black.copy(alpha = 0.45f))
         }
-        Text(s.title, style = sys(11, FontWeight.Bold), color = if (selected) DS.Colors.onSurface else DS.Colors.onSurfaceVariant)
+        Text(s.title, style = sys(11, FontWeight.Bold), color = if (selected) DS.Colors.onSurface else DS.Colors.onSurfaceVariant, maxLines = 1)
         Text(s.caption, style = sys(9), color = DS.Colors.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -348,7 +406,7 @@ private fun FormChip(vm: SmileSimulationViewModel, f: ToothForm, modifier: Modif
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
     ) {
         DfyIcon(f.icon, size = 15.dp, tint = fg)
-        Text(f.title, style = sys(12, FontWeight.SemiBold), color = fg, maxLines = 1)
+        Text(f.title, style = sys(12, FontWeight.SemiBold), color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -397,16 +455,17 @@ internal fun SmileAdvancedSection(
     onEditMask: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val credits = SmileCreditsStore.shared
     val chevron by animateFloatAsState(if (showAdvanced) 180f else 0f, Motion.easeInOut(250), label = "chevron")
     Column(modifier.fillMaxWidth().glassCard(18.dp).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().plainClickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
-            Text("GELİŞMİŞ", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
-            Spacer(Modifier.weight(1f))
+            Text("GELİŞMİŞ", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.width(12.dp))
+            // Misafir denemesinde kalite satırları kilitli görünür (yerel değişiklik); klinikte bedel YALNIZ `tiers`tan (M-E3.1).
             Text(
                 if (vm.isGuest) "${SmileAIModel.default.title} · ücretsiz deneme"
-                else "${vm.model.title} · ${SmileCreditFormat.credits(vm.estimatedCredits)} kredi",
-                style = sys(12), color = DS.Colors.outline,
+                else "${vm.model.title} · ${GulusBedeli.kart(vm.estimatedCredits)}",
+                Modifier.weight(1f),
+                style = sys(12), color = DS.Colors.outline, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
             )
             Spacer(Modifier.width(6.dp))
             DfyIcon("chevron.down", size = 11.dp, tint = DS.Colors.outline, modifier = Modifier.rotate(chevron))
@@ -421,7 +480,7 @@ internal fun SmileAdvancedSection(
                 AdvancedLabel("Kalite")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     SmileAIModel.selectable.forEach { m ->
-                        ModelRow(vm, m, locked = vm.isGuest && m != SmileAIModel.default, price = credits.price(m), onContact = onContact)
+                        ModelRow(vm, m, locked = vm.isGuest && m != SmileAIModel.default, onContact = onContact)
                     }
                 }
                 if (vm.isGuest) {
@@ -432,7 +491,10 @@ internal fun SmileAdvancedSection(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     DfyIcon("arrow.triangle.2.circlepath", size = 11.dp, tint = DS.Colors.onSurfaceVariant)
-                    Text("Model ağzı kaydırırsa sonuç otomatik düzeltilir (ücretsiz).", style = sys(11), color = DS.Colors.onSurfaceVariant)
+                    Text(
+                        "Model ağzı kaydırırsa sonuç otomatik düzeltilir (ücretsiz).", Modifier.weight(1f),
+                        style = sys(11), color = DS.Colors.onSurfaceVariant,
+                    )
                 }
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.08f), thickness = 0.5.dp)
@@ -501,21 +563,28 @@ private fun AdvancedLabel(text: String) {
 }
 
 /**
- * `locked`: ücretsiz denemede yalnız varsayılan kademe seçilir; diğerleri görünür ama kilitli
- * (dokununca iletişim ekranı).
+ * Kademe satırı — iki dalın birleşimi:
+ * - Bedel YALNIZ sunucunun `tiers`ından (M-E3.1): listede yoksa "—" ve satır seçilemez (soluk + kapalı); kart, düğme satırı
+ *   ve kredi ipucu AYNI sayıyı söyler.
+ * - `locked` (yerel değişiklik): ücretsiz denemede yalnız varsayılan kademe seçilir; diğerleri görünür ama kilitli
+ *   (dokununca iletişim ekranı), bedel yerine "Uygulamayla".
  */
 @Composable
-private fun ModelRow(vm: SmileSimulationViewModel, m: SmileAIModel, locked: Boolean, price: Double, onContact: () -> Unit) {
+private fun ModelRow(vm: SmileSimulationViewModel, m: SmileAIModel, locked: Boolean, onContact: () -> Unit) {
+    val kredi = SmileCreditsStore.shared.price(m)
+    val secilebilir = vm.secilebilir(m)
     val selected = if (vm.isGuest) m == SmileAIModel.default else vm.model == m
     Row(
         Modifier
             .fillMaxWidth()
-            .plainClickable {
+            .plainClickable(enabled = secilebilir) {
                 if (locked) { Haptics.selection(); onContact(); return@plainClickable }
                 vm.model = m; Haptics.selection()
             }
+            .semantics { this.selected = selected }
             .alpha(if (locked) 0.6f else 1f)
-            .padding(vertical = 3.dp),
+            .padding(vertical = 3.dp)
+            .alpha(if (secilebilir) 1f else 0.45f),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -525,21 +594,24 @@ private fun ModelRow(vm: SmileSimulationViewModel, m: SmileAIModel, locked: Bool
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(m.title, style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface)
+                Text(m.title, style = sys(13, FontWeight.Medium), color = DS.Colors.onSurface, maxLines = 1)
                 if (m == SmileAIModel.default) {
                     Text(
                         "ÖNERİLEN",
                         Modifier.clip(CircleShape).background(DS.Colors.cyan400).padding(horizontal = 5.dp, vertical = 2.dp),
-                        style = sys(8, FontWeight.Bold, tracking = 0.8), color = DS.Colors.onPrimary,
+                        style = sys(8, FontWeight.Bold, tracking = 0.8), color = DS.Colors.onPrimary, maxLines = 1,
                     )
                 }
             }
-            Text(m.subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant)
+            Text(m.subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         if (locked) {
-            Text("Uygulamayla", style = sys(11, FontWeight.SemiBold), color = DS.Colors.outline)
+            Text("Uygulamayla", style = sys(11, FontWeight.SemiBold), color = DS.Colors.outline, maxLines = 1)
         } else if (!vm.isGuest) {
-            Text("${SmileCreditFormat.credits(price)} kredi", style = sys(12, FontWeight.SemiBold), color = DS.Colors.onSurfaceVariant)
+            Text(GulusBedeli.kart(kredi), style = sys(12, FontWeight.SemiBold).monoDigits(), color = DS.Colors.onSurfaceVariant, maxLines = 1)
+            // Kredi ipucu — kartla AYNI sayı (`tiers`); misafir denemesinde yok.
+            val tier = m.tierKey
+            if (tier != null && kredi != null) KrediIpucu(islem = "before_after:$tier", kredi = kredi)
         }
     }
 }

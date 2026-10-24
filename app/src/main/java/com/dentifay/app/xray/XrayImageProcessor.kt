@@ -236,7 +236,13 @@ object XrayImageProcessor {
             ExifInterface.ORIENTATION_ROTATE_270 -> m.setRotate(-90f)
         }
         val upright = if (m.isIdentity) decoded else Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, m, true)
-        return opaque(scaledToFit(upright, maxWorkingEdge))
+        // Ara kopyalar hemen bırakılır: 48 MP çekimde her biri ~50 MB (düşük bellekli cihazda tepe noktası yarıya iner).
+        if (upright !== decoded) decoded.recycle()
+        val scaled = scaledToFit(upright, maxWorkingEdge)
+        if (scaled !== upright) upright.recycle()
+        val out = opaque(scaled)
+        if (out !== scaled) scaled.recycle()
+        return out
     }
 
     /** Bitmap → dik, ARGB_8888, opak, en uzun kenarı sınırlı kopya (Swift `normalized(UIImage)`). */
@@ -250,6 +256,19 @@ object XrayImageProcessor {
     fun rotatedClockwise(cg: Bitmap): Bitmap? = runCatching {
         Bitmap.createBitmap(cg, 0, 0, cg.width, cg.height, Matrix().apply { setRotate(90f) }, true)
     }.getOrNull()
+
+    /** Ekranda gösterim kopyasının en uzun kenarı (alan seçimi + 3× büyüteç için yeterli; GPU doku sınırının altında). */
+    const val displayEdge: Double = 2048.0
+
+    /**
+     * Ekranda gösterilecek kopya: en uzun kenarı `maxEdge`e kademeli küçültülmüş, mipmap ipucu açık (küçültülerek çizilirken
+     * örtüşme/titreşme olmasın). Arka planda çağrılır; işlemeye her zaman asıl görsel gider.
+     */
+    fun displayCopy(image: Bitmap, maxEdge: Double = displayEdge): Bitmap {
+        val out = scaledToFit(image, maxEdge)
+        out.setHasMipMap(true)
+        return out
+    }
 
     // MARK: - Ayrıştırma (röntgeni bul)
 
@@ -651,11 +670,14 @@ object XrayImageProcessor {
      * panoramik düzeyine getiren gama). Ekran deseni (moiré) önceden `removeScreenPattern` ile temizlenir.
      */
     fun prepare(cg: Bitmap, quad: XrayQuad, enhance: Boolean): Bitmap {
-        val image = scaledToFit(rectified(cg, quad), uploadLongEdge)
+        val flat = rectified(cg, quad)
+        val image = scaledToFit(flat, uploadLongEdge)
+        if (flat !== cg && flat !== image) flat.recycle()
         if (image.width <= 16 || image.height <= 16) throw ProcessingError.encodingFailed()
         val w = image.width; val h = image.height
         val px = IntArray(w * h)
         image.getPixels(px, 0, w, 0, 0, w, h)
+        if (image !== cg) image.recycle()
         // Doygunluk 0 (Core Image `colorControls` luma ağırlıkları).
         val gray = IntArray(w * h) { i ->
             val c = px[i]

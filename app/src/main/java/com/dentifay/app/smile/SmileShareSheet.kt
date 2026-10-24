@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -72,8 +73,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.dentifay.app.R
@@ -95,6 +98,8 @@ import com.dentifay.app.theme.sharedCacheFile
 import com.dentifay.app.theme.shareContent
 import com.dentifay.app.theme.sys
 import com.dentifay.app.theme.verticalGradient
+import com.dentifay.app.ui.LocalPencere
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -105,6 +110,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.Normalizer
 import java.time.Instant
+import kotlin.math.max
 
 /**
  * Sonucu hastaya gönderir. Görsel tam kare önce/sonra yan yana hazırlanır
@@ -127,7 +133,10 @@ fun SmileShareSheet(content: SmileShareContent, historyItem: SmileHistoryItem? =
     var phone by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var layout by remember { mutableStateOf(SmileShareLayout.full) }
+    /** Gönderilecek tam görsel (2400 px). */
     var image by remember { mutableStateOf<Bitmap?>(null) }
+    /** Ekrandaki önizleme — tam görselin küçültülmüş kopyası (GPU'ya 2400 px yüklenmesin). */
+    var previewImage by remember { mutableStateOf<Bitmap?>(null) }
     var suggestions by remember { mutableStateOf<List<APIPatientWithAppointments>>(emptyList()) }
     /** Öneriden seçilen ad — aynı adla tekrar arama yapılmasın. */
     var pickedName by remember { mutableStateOf<String?>(null) }
@@ -175,8 +184,12 @@ fun SmileShareSheet(content: SmileShareContent, historyItem: SmileHistoryItem? =
     LaunchedEffect(layout, name) {
         if (image != null) delay(350)
         val c = content; val l = layout; val n = name
-        val rendered = withContext(Dispatchers.Default) { SmileShareComposer.render(c, l, n) }
+        val (rendered, onizleme) = withContext(Dispatchers.Default) {
+            val r = SmileShareComposer.render(c, l, n)
+            r to r?.let { runCatching { smileDisplayCopy(it, maxPx = 1600) }.getOrNull() }
+        }
         image = rendered
+        previewImage = onizleme ?: rendered
     }
 
     // Hasta araması
@@ -253,14 +266,18 @@ fun SmileShareSheet(content: SmileShareContent, historyItem: SmileHistoryItem? =
         }
     }
 
-    /** Tam fotoğraf düzenindeki görseli hastanın dosyasına yükler. */
+    /**
+     * Ekranda seçili düzendeki görseli (Tam fotoğraf ya da Tam + gülüş detayı) hastanın dosyasına
+     * yükler — hastaya gönderilen görselle dosyadaki görsel AYNI olsun. Web'deki Gülüş Tasarımı
+     * kartı (Medya › Gülüş kartı) bu görselle aynı şablondadır.
+     */
     suspend fun uploadToPatient(item: SmileHistoryItem) {
         val pid = patientId ?: return
         isSaving = true
         try {
-            val c = content; val n = name
+            val c = content; val n = name; val l = layout
             val jpeg = withContext(Dispatchers.Default) {
-                SmileShareComposer.render(c, SmileShareLayout.full, n)?.let { bmp ->
+                SmileShareComposer.render(c, l, n)?.let { bmp ->
                     ByteArrayOutputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 90, out); out.toByteArray() }
                 }
             }
@@ -313,6 +330,8 @@ fun SmileShareSheet(content: SmileShareContent, historyItem: SmileHistoryItem? =
         if (saved != null && canUploadToPatient && addToPatientFile) uploadToPatient(saved)
     }
 
+    // Önizleme pencereye sığar (Swift `maxHeight: 420`; kısa pencerede pencerenin %45'i).
+    val onizlemeMax = min(420.dp, LocalPencere.current.yukseklik * 0.45f)
     Box(Modifier.fillMaxSize().background(DS.Colors.background)) {
         Column(Modifier.fillMaxSize().imePadding()) {
             SmileInlineNavBar("Hastaya Gönder", onTrailing = onDismiss)
@@ -322,17 +341,20 @@ fun SmileShareSheet(content: SmileShareContent, historyItem: SmileHistoryItem? =
             ) {
                 // Önizleme
                 Box(
-                    Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                    Modifier.fillMaxWidth().heightIn(max = onizlemeMax)
                         .semantics { contentDescription = "Gönderilecek önce ve sonra görseli" },
                     contentAlignment = Alignment.Center,
                 ) {
-                    val img = image
+                    val img = previewImage
                     if (img != null) {
                         val shape = RoundedCornerShape(16.dp)
                         Image(
                             remember(img) { img.asImageBitmap() }, null,
-                            Modifier.clip(shape).border(1.dp, Color.White.copy(alpha = 0.1f), shape),
-                            contentScale = ContentScale.Fit,
+                            Modifier
+                                .aspectRatio(img.width.toFloat() / max(img.height, 1).toFloat())
+                                .clip(shape)
+                                .border(1.dp, Color.White.copy(alpha = 0.1f), shape),
+                            contentScale = ContentScale.FillBounds,
                         )
                     } else {
                         Box(
@@ -375,8 +397,14 @@ fun SmileShareSheet(content: SmileShareContent, historyItem: SmileHistoryItem? =
                                 ) {
                                     DfyIcon("person.crop.circle.fill", tint = DS.Colors.cyan400)
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                        Text("${p.firstName} ${p.lastName}", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface)
-                                        Text(p.phone ?: p.email ?: "İletişim bilgisi yok", style = sys(11), color = DS.Colors.onSurfaceVariant)
+                                        Text(
+                                            "${p.firstName} ${p.lastName}", style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            p.phone ?: p.email ?: "İletişim bilgisi yok", style = sys(11), color = DS.Colors.onSurfaceVariant,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        )
                                     }
                                     DfyIcon("arrow.up.left", size = 11.dp, tint = DS.Colors.outline)
                                 }
@@ -568,8 +596,8 @@ private fun ShareAction(title: String, subtitle: String, icon: String, tint: Col
             contentAlignment = Alignment.Center,
         ) { DfyIcon(icon, size = 16.dp, tint = Color.White) }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(title, style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1)
-            Text(subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 1)
+            Text(title, style = sys(14, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = sys(11), color = DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -587,7 +615,10 @@ private fun SaveButton(title: String, icon: String, isSaving: Boolean, enabled: 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (isSaving) SmileSpinner(color = Color.White, size = 16.dp) else DfyIcon(icon, size = 14.dp, tint = Color.White)
-        Text(title, style = sys(14, FontWeight.Bold), color = Color.White, maxLines = 1)
+        Text(
+            title, Modifier.weight(1f, fill = false),
+            style = sys(14, FontWeight.Bold), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -687,6 +718,24 @@ private fun saveBitmapToGallery(context: Context, image: Bitmap, fileName: Strin
 @Composable
 private fun SmileShareSheetPreview() {
     PreviewEnv {
+        val before = rememberSampleBitmap(R.drawable.smile_before)
+        val after = rememberSampleBitmap(R.drawable.smile_after)
+        val content = remember(before, after) {
+            SmileShareContent(
+                before = before, after = after, zoomRect = null,
+                designTitle = "Doğal Beyaz", designSummary = "Beyazlatma · A1", tierTitle = "Orta",
+                createdAt = Instant.now(),
+            )
+        }
+        SmileShareSheet(content = content, onDismiss = {})
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 640, heightDp = 800)
+@Composable
+private fun SmileShareSheetTabletPreview() {
+    // Sayfa tablette 640 dp genişlikte ortalanır (DfySheet).
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) {
         val before = rememberSampleBitmap(R.drawable.smile_before)
         val after = rememberSampleBitmap(R.drawable.smile_after)
         val content = remember(before, after) {

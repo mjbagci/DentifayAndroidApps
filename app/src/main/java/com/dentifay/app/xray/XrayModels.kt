@@ -223,6 +223,18 @@ fun XrayResult.findings(minProbability: Double): List<XrayToothFinding> {
     }.sortedWith(compareBy<XrayToothFinding> { it.fdi }.thenBy { it.id })
 }
 
+/**
+ * Önerisi olan dişler, tedavi önceliğiyle (çekim → periodontal → kanal → … — dişin en öncelikli önerisi), eşitse FDI sırasıyla
+ * (sonuç ekranının "Bulgular" listesi; Swift `XrayAnalysisViewModel.findingTeeth`).
+ */
+fun List<XrayToothFinding>.byTreatmentPriority(): List<XrayToothFinding> =
+    filter { it.recs.isNotEmpty() }
+        .sortedWith { a, b ->
+            val pa = a.recs.minOfOrNull { XrayCatalog.priority[it.cls] ?: 9 } ?: 9
+            val pb = b.recs.minOfOrNull { XrayCatalog.priority[it.cls] ?: 9 } ?: 9
+            if (pa == pb) a.fdi.compareTo(b.fdi) else pa.compareTo(pb)
+        }
+
 /** Anatomik yapılar (normalize dikdörtgen). */
 fun XrayResult.anatomy(): List<Pair<XrayLayerItem, Rect>> {
     val w = max(width, 1.0)

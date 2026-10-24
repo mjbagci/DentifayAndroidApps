@@ -1,55 +1,89 @@
+@file:Suppress("ConstPropertyName")
+
 package com.dentifay.app.agent
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import com.dentifay.app.theme.DS
-import com.dentifay.app.theme.sys
-import com.dentifay.app.ui.PreviewEnv
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.dentifay.app.core.ApiException
 import com.dentifay.app.core.CreditRequired
+import com.dentifay.app.core.KREDI_KUR_YOK_METNI
+import com.dentifay.app.core.Yetki
 import com.dentifay.app.credit.SmileCreditsStore
-import com.dentifay.app.voice.SpeechManager
-import com.dentifay.app.voice.VoiceProgress
+import com.dentifay.app.theme.DS
+import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.PreviewEnv
+import com.dentifay.app.voice.DictationSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
-import java.net.ConnectException
-import java.net.NoRouteToHostException
 import java.net.SocketException
 import java.net.UnknownHostException
 import java.util.UUID
 
-/** Sohbet ajanı oturumu (Swift `@Observable final class AgentSessionManager`). Sohbet ve sesli mod paylaşır. */
-class AgentSessionManager {
+/** Akış kaynağı: (mesaj, sohbet, pick, moduleScope, hedefPlanId, onay) → SSE olayları. Testler sahte akış verir. */
+internal typealias AkisKaynagi =
+    (String, String?, AgentClient.PickPayload?, String?, String?, AgentClient.OnayPayload?) -> Flow<AgentEvent>
+
+/**
+ * Sohbet ajanı oturumu (Swift `@Observable final class AgentSessionManager`). Sohbet ekranı ve Tedavi Planı paylaşır;
+ * alanlar Compose anlık durumudur, iş ana iş parçacığında (`MainScope`) yürür. Ekran kapanınca `dispose()`.
+ */
+class AgentSessionManager internal constructor(private val akisAc: AkisKaynagi) {
+
+    constructor() : this({ m, c, p, s, h, o -> AgentClient.shared.streamChat(m, c, p, s, h, o) })
 
     // MARK: - State
     var messages by mutableStateOf<List<AgentMessage>>(emptyList())
     var conversationId by mutableStateOf<String?>(null)
     var conversations by mutableStateOf<List<AgentConversation>>(emptyList())
+
+    /** Sohbet listesinin sayfası ve durumu (Ek MO.18). */
+    var sohbetSayfasi by mutableIntStateOf(1)
+        private set
+    var sohbetDahaVar by mutableStateOf(false)
+    var sohbetListeHatasi by mutableStateOf(false)
+        private set
+    var sohbetListeYukleniyor by mutableStateOf(false)
+        private set
     var draft by mutableStateOf("")
     var isStreaming by mutableStateOf(false)
+
+    /**
+     * Bağlantı durumu — modelin değil, BAĞLANTININ durumu (M-E1.5.1). Sağlık ucu yoklanmaz: tur bağlantı hatasıyla
+     * düşerse `false`, akıştan ilk olay gelince `true`.
+     */
     var agentOnline by mutableStateOf(true)
     var isListening by mutableStateOf(false)        // dikte (konuşma → düzenlenebilir taslak)
     var elapsedSeconds by mutableIntStateOf(0)
 
-    val speech = SpeechManager()
+    /**
+     * Tek ses yığını (AudioSessionCoordinator → VoiceAudioGraph → SpeechPipeline). İlk dikte isteğinde kurulur —
+     * yalnız yazan kullanıcı için ses grafiği açılmaz.
+     */
+    private val sesYigini = lazy(LazyThreadSafetyMode.NONE) { DictationSession() }
+    val speech: DictationSession get() = sesYigini.value
+
+    /** Önizleme / test: ağ çağrısı yapılmaz (sohbet listesi ve bakiye okunmaz). */
+    var ornekVeri = false
 
     private val scope = MainScope()
 
@@ -60,56 +94,94 @@ class AgentSessionManager {
     private var streamTask: Job? = null
     private var tickTask: Job? = null
 
-    /** Asistan turu akışı bitince çağrılır. Canlı sesli mod turun bittiğini (dinlemeye dönüş) buradan öğrenir. */
+    /** Bir asistan turu akışı bitince çağrılır (Tedavi Planı faz kararını buradan verir). */
     var onAssistantComplete: ((AgentMessage) -> Unit)? = null
 
-    // MARK: - Sesli mod köprüsü (LiveVoiceSession bunları bağlar)
+    // MARK: - Modül köprüsü (Tedavi Planı bunları bağlar)
 
-    /** True iken turlar `mode:"voice"` ile gönderilir (RAG dar, speak öne alınır). */
-    var voiceMode = false
-    /** Cümle cümle konuşma metni (`speak_delta`) — TTS kuyruğuna EKLE. */
-    var onSpeakDelta: ((String) -> Unit)? = null
-    /** Monolitik `speak` — yalnız o role için delta GÖRÜLMEDİYSE çağrılır. */
-    var onSpeakFull: ((String) -> Unit)? = null
-    /** Yapısal seçenekler (patient_choices/entity_choices) — zengin alanlı, regex tahmini YOK. */
-    var onChoices: ((List<AgentChoice>) -> Unit)? = null
-    /** Yazma onayı geldiğinde (sesli modda tam ekran kart + biyometrik onay için). */
+    /** Sunucu-sahipli modül odağı (tek enum id). Yetki/kapsam GENİŞLETMEZ. */
+    var moduleScope: String? = null
+
+    /**
+     * Her turda YENİDEN gönderilecek kimlik sabitlemesi (ör. seçili hasta). `resolvedPicks` biriktirici olduğu için
+     * tekrar göndermek zararsızdır ve konuşma yeniden yüklense bile kimliği sabit tutar.
+     */
+    var stickyPick: AgentClient.PickPayload? = null
+
+    /** Tedavi Planı'nda açık plana ekleme — oturumun HER sohbet isteğinde gövdeye girer (M-E1.2.4). */
+    var hedefPlanId: String? = null
+
+    /** Her SSE olayında çağrılır — Tedavi Planı'nın hareketsizlik bekçisi buradan kurulur (M-E1.2.8). */
+    var onActivity: (() -> Unit)? = null
+
+    /** Yazma önizlemesi geldiğinde (Tedavi Planı önizleme ekranı için). */
     var onWritePreview: ((AgentWritePreview) -> Unit)? = null
-    /** İlerleme olayları (queue/schema_link/thinking/tool_result/heartbeat) — sesli ekran ilerleme rayı için. */
-    var onProgress: ((VoiceProgress) -> Unit)? = null
-    /** Bu tur içinde `speak_delta` yayan role'ler; tur başında temizlenir. */
-    private val rolesWithDelta = mutableSetOf<String>()
+
+    /** Tur "yapamadım" ile bitti (`soft_fail` / `error`) — GERÇEK hata sinyali. */
+    var onSoftFail: ((String) -> Unit)? = null
+
+    /** İlerleme olayları (queue/schema_link/thinking/tool_result) — Tedavi Planı ilerleme rayı için. */
+    var onProgress: ((AgentProgress) -> Unit)? = null
+
+    /** Akış sürerken tıklanıp KUYRUĞA alınan seçim, tur bitince gönderildiğinde. */
+    var onChoiceDispatched: ((AgentChoice) -> Unit)? = null
 
     // MARK: - Tur kimliği + kompozer hatası
-    /** Her tur benzersiz kimlik alır; finishStreaming yalnız KENDİ turunu bitirir. */
+
+    /** Her tur benzersiz kimlik alır; finishStreaming yalnız KENDİ turunu bitirir (eski tur yeni turun bayrağını düşürmesin). */
     private var currentTurnId: UUID = UUID.randomUUID()
+
     /** Son gönderilen kullanıcı metni — retry için korunur. */
     var lastUserText = ""
         private set
+
+    /** Son turun pick'i — "Tekrar dene" AYNI kimlikle koşsun. */
+    var lastPick: AgentClient.PickPayload? = null
+        private set
+
+    /** Önceki turun `onay` alanı — "Tekrar dene" aynı alanla koşsun (M-E1.5.6). */
+    var lastOnay: AgentClient.OnayPayload? = null
+        private set
+
     /** Kompozer altında gösterilecek hata (null = yok). */
     var composerError by mutableStateOf<String?>(null)
-    /** Son turun `credits` olayındaki kullanılabilir kredi (null = henüz bilinmiyor). */
-    var lastAvailableCredits by mutableStateOf<Double?>(null)
+
+    /**
+     * 🔴 AKIŞ SÜRERKEN TIKLANAN KART YUTULMAZ — KUYRUĞA ALINIR. Kartlar tur BİTMEDEN çizilir (backend onları turun sonuç
+     * olayından ÖNCE yayar) ama gönderme kilitlidir; tıklanan kart arayüzde "seçildi" olarak işaretlenir, tur bitince gider.
+     */
+    var queuedChoice by mutableStateOf<AgentChoice?>(null)
         private set
+
+    /** "Yeniden gönder"in pick'i (silinmiş sohbet). */
+    private var yenidenGonderPick: AgentClient.PickPayload? = null
 
     // MARK: - Lifecycle
 
     fun onAppear() {
-        scope.launch {
-            agentOnline = AgentClient.shared.health()
-            loadConversations()
-            if (!speech.isAuthorized) speech.requestAuthorization()
-        }
+        if (ornekVeri) return
+        // Açılışta YALNIZ sohbet listesi — sağlık ucuna istek ATILMAZ (M-E1.5.1). Mikrofon izni dikte başlarken istenir.
+        scope.launch { loadConversations() }
     }
 
     fun onDisappear() {
         stop()
-        if (isListening) { speech.stopRecording(); isListening = false }
+        releaseAudio()
     }
 
-    /** Ekran kapanınca coroutine'leri bırakır (Compose `DisposableEffect`). */
+    /**
+     * 🔴 SES YIĞINI SERBEST BIRAKILIR. `stopDictation()` grafiği BİLEREK açık bırakır (mikrofona tekrar basmak ucuz
+     * olsun); ekran kapanırken (sohbet ve Tedavi Planı `teardown`) oturum burada tamamen kapanır.
+     */
+    fun releaseAudio() {
+        stopDictation()
+        if (sesYigini.isInitialized()) speech.close()
+    }
+
+    /** Ekran kapanınca: tur durur, ses yığını bırakılır (kurulduysa), eşyordamlar bırakılır (Compose `DisposableEffect`). İdempotent. */
     fun dispose() {
         onDisappear()
+        if (sesYigini.isInitialized()) speech.dispose()
         scope.cancel()
     }
 
@@ -128,55 +200,48 @@ class AgentSessionManager {
         sendMessage(text)
     }
 
-    /** Sesli moddan tur gönderir (mode:"voice"). Geçmişi sohbet ile paylaşır. */
-    fun sendVoice(text: String) {
+    /** İLK SINIF gönderim yolu: bir turu isteğe bağlı `pick` ile gönderir (modüller — seçili hasta kimliği her turda gider). */
+    fun send(text: String, pick: AgentClient.PickPayload? = null) {
         if (isStreaming) return
-        sendMessage(text)
+        sendMessage(text, pick = pick)
     }
 
     /**
-     * Belirsizlik kartı seçimi. Kimlik VARSA seçim `pick`/`patientPick` ile id olarak taşınır
-     * (backend yeniden aramaz); YOKSA geriye uyum için metin gider.
+     * Belirsizlik kartı seçimi. 🔴 TEK KANAL: her tabloda `pick` gönderilir (`patientPick` YOLU KALDIRILDI).
+     * @return true = hemen gönderildi, false = kuyruğa alındı (tur akıyor) ya da kimliksiz kart.
      */
-    fun sendChoice(choice: AgentChoice) {
-        if (isStreaming) return
-        // Ekranda görünen/geçmişe yazılan metin: kartın adı.
-        val message = choice.title
-        val id = choice.recordId
-        if (!id.isNullOrEmpty()) {
-            val table = choice.table
-            if (table == "patients") {
-                // Backend patientPick'i term=name ile pick'e çevirir → name boş olmamalı.
-                sendMessage(message, patientPick = AgentClient.PatientPick(id, choice.title))
-            } else if (!table.isNullOrEmpty()) {
-                // pick.term backend'de ZORUNLU + boşsa düşer → olay term'i, yoksa ad.
-                val term = choice.term?.takeIf { it.isNotEmpty() } ?: choice.title
-                sendMessage(message, pick = AgentClient.PickPayload(table, term, id, choice.title))
-            } else {
-                sendMessage(choice.sendText)   // tablo yok → metin yolu (geriye uyum)
-            }
-        } else {
-            // Kimlik yok (eski backend / düz string) → metin yolu.
-            sendMessage(choice.sendText)
+    fun sendChoice(choice: AgentChoice): Boolean {
+        // Kimliksiz kart dokunulamaz (Ek MO.10c) — hastanın telefonu/TC'si mesaja YAZILMAZ.
+        if (choice.pick == null) return false
+        if (isStreaming) {
+            queuedChoice = choice
+            return false
         }
+        dispatchChoice(choice)
+        return true
     }
 
-    private fun sendMessage(
-        text: String,
-        pick: AgentClient.PickPayload? = null,
-        patientPick: AgentClient.PatientPick? = null,
-    ) {
+    private fun dispatchChoice(choice: AgentChoice) {
+        // Ekranda görünen/geçmişe yazılan metin: kartın adı. Seçim YALNIZ `pick` ile.
+        val pick = choice.pick ?: return
+        sendMessage(choice.title, pick = pick)
+    }
+
+    private fun sendMessage(text: String, pick: AgentClient.PickPayload? = null, onay: AgentClient.OnayPayload? = null) {
         // Önceki tur hâlâ sarılıyorsa iptal et (yoksa eski finishStreaming yeni turun bayrağını düşürür).
         streamTask?.cancel()
         lastUserText = text
+        // Kimlik sabitlemesi: turun kendi pick'i, yoksa oturumun sabit pick'i.
+        val effectivePick = pick ?: stickyPick
+        lastPick = effectivePick
+        lastOnay = onay
         composerError = null
+        queuedChoice = null
         val turnId = UUID.randomUUID()
         currentTurnId = turnId
         val assistant = AgentMessage(role = AgentRole.assistant, streaming = true)
         messages = messages + AgentMessage(role = AgentRole.user, content = text) + assistant
-        val assistantId = assistant.id
         isStreaming = true
-        rolesWithDelta.clear()
         elapsedSeconds = 0
         tickTask?.cancel()
         tickTask = scope.launch {
@@ -186,155 +251,137 @@ class AgentSessionManager {
                 elapsedSeconds += 1
             }
         }
-        streamTask = scope.launch { runStream(text, assistantId, turnId, pick, patientPick) }
+        streamTask = scope.launch { runStream(text, assistant.id, turnId, effectivePick, onay) }
     }
 
     private suspend fun runStream(
         text: String,
         assistantId: UUID,
         turnId: UUID,
-        pick: AgentClient.PickPayload? = null,
-        patientPick: AgentClient.PatientPick? = null,
+        pick: AgentClient.PickPayload?,
+        onay: AgentClient.OnayPayload?,
     ) {
         try {
-            AgentClient.shared.streamChat(
-                message = text, conversationId = conversationId, mode = if (voiceMode) "voice" else null,
-                pick = pick, patientPick = patientPick,
-            ).collect { event ->
-                if (!currentCoroutineContext().isActive) return@collect
-                handle(event, assistantId)
+            akisAc(text, conversationId, pick, moduleScope, hedefPlanId, onay).collect { event ->
+                akistanOlay(event, assistantId)
             }
         } catch (e: CancellationException) {
             // İptal (durdur / yeni tur): hata yazılmaz; tur yine de kapatılır.
         } catch (credit: CreditRequired) {
-            // 402: sunucu turu BAŞLATMADI (kredi düşülmedi). Ham kod yok — Türkçe metin +
-            // balonda kredi kartı; sesli mod aynı alanı `onAssistantComplete`te okur.
+            // 402: sunucu turu BAŞLATMADI. Ham kod yok — Türkçe metin + balonda kredi kartı;
+            // Tedavi Planı aynı alanı `onAssistantComplete`te okur.
             applyCreditRequired(credit, assistantId)
         } catch (e: Throwable) {
-            val msg = errorText(e)
-            if (msg.isNotEmpty()) {
-                update(assistantId) { m -> m.copy(isError = true, content = if (m.content.isEmpty()) msg else m.content) }
-            }
-            // Başarısız tur yalnızca modelin meşgul olduğunu gösterebilir — afiş gerçeği yansıtsın diye sağlığı yeniden denetle.
-            scope.launch { agentOnline = AgentClient.shared.health() }
+            turHatasi(e, text, pick, assistantId)
         }
         finishStreaming(assistantId, turnId)
     }
 
-    private fun errorText(error: Throwable): String {
-        if (error is CancellationException) return ""
-        if (error is AgentClient.AgentError) return error.errorDescription ?: "Bir hata oluştu."
-        if (error is IOException) {
-            if (error.message?.contains("Canceled", ignoreCase = true) == true) return ""
-            return when (error) {
-                is InterruptedIOException ->
-                    "Yanıt çok uzun sürdü. Analitik sorular yerel modelde birkaç dakika sürebilir — tekrar deneyin veya daha basit sorun."
-                is ConnectException, is UnknownHostException, is NoRouteToHostException, is SocketException ->
-                    "Sunucuya ulaşılamadı. Backend ve ağ bağlantısını kontrol edin."
-                else -> "Bağlantı hatası: ${error.localizedMessage ?: ""}"
+    /** Akış hatası: bağlantı hatası `agentOnline`ı düşürür; 404 sohbeti yeni sohbete çevirir; diğerleri MO.15 / sunucu cümlesi. */
+    fun turHatasi(error: Throwable, text: String, pick: AgentClient.PickPayload?, assistantId: UUID) {
+        if (baglantiHatasiMi(error)) agentOnline = false
+        if (sohbetBulunamadiMi(error)) {
+            // Silinmiş/süresi dolmuş sohbet: çıkmaz sokak değil — yeni sohbet + "Yeniden gönder" (O.27C-7).
+            sohbetBulunamadi(text, pick, assistantId)
+        } else {
+            val msg = errorText(error)
+            if (msg.isNotEmpty()) {
+                val kod = (error as? AgentClient.AgentError)?.serverCode
+                update(assistantId) { it.copy(isError = true, errorCode = kod, content = it.content.ifEmpty { msg }) }
+                // Kompozer hata çubuğu + "Tekrar dene".
+                composerError = msg
+                onSoftFail?.invoke(msg)
             }
         }
-        return "Bağlantı hatası oluştu."
     }
 
+    /** Akıştan gelen her olay: bağlantı var (`agentOnline = true`), bekçi kurulur, olay işlenir. */
+    fun akistanOlay(event: AgentEvent, assistantId: UUID) {
+        agentOnline = true
+        onActivity?.invoke()
+        handle(event, assistantId)
+    }
+
+    fun sohbetBulunamadi(metin: String, pick: AgentClient.PickPayload?, assistantId: UUID) {
+        conversationId?.let { eski -> conversations = conversations.filter { it.id != eski } }
+        conversationId = null
+        update(assistantId) { it.copy(isError = true, content = sohbetBulunamadiMetni, yenidenGonderilecek = metin) }
+        yenidenGonderPick = pick
+    }
+
+    /** "Yeniden gönder" — son metni YENİ sohbette, aynı `pick` ile; `onay` TAŞIMAZ (önizleme yeni sohbette yok). */
+    fun yenidenGonder(mesaj: AgentMessage) {
+        val metin = mesaj.yenidenGonderilecek ?: return
+        if (isStreaming) return
+        conversationId = null
+        sendMessage(metin, pick = yenidenGonderPick)
+    }
+
+    /**
+     * ⚠️ Backend'in FİİLEN yaydığı olaylar. `heartbeat` bir SSE YORUM satırıdır (`: hb`), JSON olay DEĞİL;
+     * `queue_choices` / `tool_call` / üst-düzey `chart` hiç yayılmaz (grafik `tool_result name:"chart_spec"` artifact'i
+     * olarak gelir). Var olmayan olayı beklemek sözleşme hakkında yalan söyleyen ölü koddur.
+     */
     private fun handle(ev: AgentEvent, assistantId: UUID) {
         when (ev.type) {
             "conversation" -> ev.string("conversationId")?.let { conversationId = it }
 
             "thinking" -> {
-                update(assistantId) { it.copy(thinkingText = ev.string("text")) }
-                ev.string("text")?.let { t -> onProgress?.invoke(VoiceProgress.reasoning(t, ev.string("stage"))) }
-            }
-
-            "queue" -> onProgress?.invoke(VoiceProgress.queued(ev.int("position") ?: 0))
-
-            "schema_link" -> {
-                val tables = (ev.raw["tables"]?.arrayValue ?: emptyList()).mapNotNull {
-                    it.stringValue ?: it.objectValue?.get("name")?.stringValue
-                }
-                onProgress?.invoke(VoiceProgress.retrieved(tables))
-            }
-
-            "examples" -> onProgress?.invoke(VoiceProgress.retrieved(emptyList()))   // yalnız adım ilerlet
-
-            "heartbeat" -> onProgress?.invoke(VoiceProgress.heartbeat(ev.int("elapsedMs") ?: 0))
-
-            "token" -> update(assistantId) { it.copy(content = it.content + (ev.string("text") ?: ""), thinkingText = null) }
-
-            "speak_delta" -> {
-                // Cümle cümle konuşma metni (yalnız sesli mod). EKLE anlamında.
-                val role = ev.string("role") ?: "final"
-                rolesWithDelta += role
-                val final = ev.bool("final") ?: false
                 val text = ev.string("text")
-                if (!final && !text.isNullOrEmpty()) onSpeakDelta?.invoke(text)
+                update(assistantId) { it.copy(thinkingText = text) }
+                if (text != null) onProgress?.invoke(AgentProgress.reasoning(text, ev.string("stage")))
             }
 
-            "speak" -> {
-                // Backend'in temiz (kimliksiz) metni. Ekranda write-preview başlığı;
-                // sesli modda o role için delta GÖRÜLMEDİYSE sesli okunur.
-                val text = ev.string("text")
-                if (!text.isNullOrEmpty()) {
-                    update(assistantId) { it.copy(speakText = text) }
-                    val role = ev.string("role") ?: "final"
-                    if (role !in rolesWithDelta) onSpeakFull?.invoke(text)
-                }
+            "queue" -> onProgress?.invoke(AgentProgress.queued(ev.int("position") ?: 0))
+
+            // Yalnız "anlama" adımı; tablo adı gösterilmez.
+            "schema_link", "examples" -> onProgress?.invoke(AgentProgress.retrieved)
+
+            "token" -> {
+                val t = ev.string("text") ?: ""
+                update(assistantId) { it.copy(content = it.content + t, thinkingText = null) }
             }
 
-            "patient_choices", "entity_choices", "queue_choices" -> {
-                val table = ev.string("table")
-                val term = ev.string("term")
-                val arr = ev.raw["choices"]?.arrayValue ?: ev.raw["options"]?.arrayValue ?: emptyList()
-                val choices = arr.mapNotNull { item ->
-                    val obj = item.objectValue
-                    if (obj == null) {
-                        // Düz string dizisi geldiyse (eski backend) sade karta düş.
-                        item.stringValue?.let { AgentChoice.plain(it) }
-                    } else {
-                        AgentChoice.parse(obj, table, term)
-                    }
-                }
-                if (choices.isNotEmpty()) onChoices?.invoke(choices)
+            "patient_choices", "entity_choices" -> {
+                // Kart MESAJA bağlanır (global state'e DEĞİL). 0 adaylı `elleSecim` kartı da çizilir (26D.7).
+                val set = AgentChoiceSet.parse(ev.raw)
+                if (set.cizilir) update(assistantId) { it.copy(choiceSet = set) }
             }
 
-            "tool_result", "tool_call" -> {
+            "tool_result" -> {
                 handleTool(ev, assistantId)
-                onProgress?.invoke(VoiceProgress.tool(ev.string("name") ?: "", ev.string("summary") ?: "", ev.bool("ok") ?: true))
-            }
-
-            "chart", "chart_spec" -> AgentChartSpec.from(ev.raw)?.let { spec ->
-                update(assistantId) { it.copy(charts = it.charts + spec) }
+                onProgress?.invoke(
+                    AgentProgress.tool(ev.string("name") ?: "", ev.string("summary") ?: "", ev.bool("ok") ?: true, ev.int("rowCount")),
+                )
             }
 
             "write_preview" -> {
-                val preview = AgentWritePreview(
-                    operation = ev.string("operation"),
-                    entity = ev.string("entity"),
-                    risk = ev.string("risk"),
-                    affectedCount = ev.int("affectedCount"),
-                    requiresDoubleConfirm = ev.bool("requiresDoubleConfirm") ?: false,
-                )
+                // Tek ayrıştırıcı (konuşma ayrıntısının `pendingWrite`ı da bunu kullanır).
+                val preview = AgentWritePreview.parse(ev.raw)
                 update(assistantId) { it.copy(writePreview = preview) }
                 onWritePreview?.invoke(preview)
             }
 
             "write_confirmation_required", "write_double_confirm" -> update(assistantId) { m ->
                 val p = m.writePreview
-                if (p == null) {
+                if (p != null) {
+                    if (ev.type == "write_double_confirm") m.copy(writePreview = p.copy(requiresDoubleConfirm = true)) else m
+                } else {
                     m.copy(
                         writePreview = AgentWritePreview(
-                            null, null, null, null,
+                            operation = null, entity = null, risk = null, affectedCount = null,
                             requiresDoubleConfirm = ev.type == "write_double_confirm" || (ev.bool("requiresDoubleConfirm") ?: false),
-                        )
+                        ),
                     )
-                } else if (ev.type == "write_double_confirm") {
-                    m.copy(writePreview = p.copy(requiresDoubleConfirm = true))
-                } else m
+                }
             }
 
             "write_result" -> update(assistantId) {
                 it.copy(writeResult = AgentWriteResult.from(ev.string("status") ?: ""), writePreview = null)
             }
+
+            // 🔴 Tur "yapamadım" ile bitti — AÇIK sinyal (Tedavi Planı tahmin yürütmez).
+            "soft_fail" -> update(assistantId) { it.copy(softFailCode = ev.string("code") ?: "SOFT_FAIL") }
 
             "error" -> {
                 // Kredi kodu taşıyan olay (eski demo olayı dahil) 402 ile AYNI yoldan geçer.
@@ -342,21 +389,16 @@ class AgentSessionManager {
                 if (credit != null) {
                     applyCreditRequired(credit, assistantId)
                 } else {
-                    update(assistantId) {
-                        it.copy(isError = true, content = ev.string("message") ?: "Bir hata oluştu.", thinkingText = null)
-                    }
+                    // `E_CREDIT_FX_MISSING` kredi modeli DEĞİL: sunucunun cümlesi, yoksa Ek MO.23f.
+                    val msg = ev.string("message")
+                        ?: if (ev.string("code") == "E_CREDIT_FX_MISSING") KREDI_KUR_YOK_METNI else "Bir hata oluştu."
+                    update(assistantId) { it.copy(isError = true, content = msg, thinkingText = null) }
+                    composerError = msg
+                    onSoftFail?.invoke(msg)
                 }
             }
 
-            "credits" -> {
-                // `{type:"credits", charged, availableCredits}` — `end`ten hemen önce gelir.
-                ev.raw["availableCredits"]?.doubleValue?.let { available ->
-                    lastAvailableCredits = available
-                    SmileCreditsStore.shared.noteBalanceChanged()
-                }
-            }
-
-            "done", "end" -> Unit
+            "start", "done", "end" -> Unit
 
             else -> Unit
         }
@@ -374,16 +416,10 @@ class AgentSessionManager {
         val artType = art["type"]?.stringValue
 
         if (name.contains("excel") || artType == "excel") {
-            val file = AgentExcelArtifact(
-                filename = art["filename"]?.stringValue ?: "rapor.xlsx",
-                downloadUrl = art["downloadUrl"]?.stringValue ?: "",
-                fileId = art["fileId"]?.stringValue,
-                rowCount = art["rowCount"]?.doubleValue?.toInt(),
-            )
-            if (file.downloadUrl.isNotEmpty()) {
-                update(assistantId) { it.copy(excelFiles = it.excelFiles + file) }
-            }
-        } else if (name.contains("chart") || artType == "chart") {
+            // Ayrıntının `artifacts[]`ı da AYNI kurucuyu kullanır.
+            AgentExcelArtifact.from(art)?.let { file -> update(assistantId) { it.copy(excelFiles = it.excelFiles + file) } }
+        } else if (name.contains("chart")) {
+            // `tool_result name:"chart_spec"` → artifact DOĞRUDAN spec'tir.
             AgentChartSpec.from(art)?.let { spec -> update(assistantId) { it.copy(charts = it.charts + spec) } }
         }
     }
@@ -401,33 +437,69 @@ class AgentSessionManager {
         tickTask?.cancel()
         tickTask = null
         messages.firstOrNull { it.id == assistantId }?.let { onAssistantComplete?.invoke(it) }
+        // Her tur sonunda bakiye cüzdandan okunur (`credits` olayı YOK — M-E1.5.2, M-E1.7.7).
+        if (!ornekVeri) scope.launch { bakiyeyiTazele() }
+        // Akış sırasında tıklanan kart varsa ŞİMDİ gönder (sessiz yutma YOK).
+        val queued = queuedChoice
+        if (queued != null) {
+            queuedChoice = null
+            onChoiceDispatched?.invoke(queued)
+            dispatchChoice(queued)
+            return
+        }
         scope.launch { loadConversations() }
     }
 
-    /** Kompozer hata çubuğundan "Tekrar dene". */
-    fun retryLast() {
-        if (isStreaming || lastUserText.isEmpty()) return
-        sendMessage(lastUserText)
+    private suspend fun bakiyeyiTazele() {
+        try {
+            SmileCreditsStore.shared.refresh()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Bakiye okunamadı — sohbet etkilenmez.
+        }
     }
 
     /**
-     * 402 (ya da kredi kodlu SSE `error`) → balon: Türkçe metin + kredi kartı. Tek yol;
-     * sohbet, sesli mod ve Tedavi Planı aynı alanı okur. Bakiye göstergesi tazelenir.
+     * Kompozer hata çubuğundan "Tekrar dene" — başarısız turun KULLANICI ve ASİSTAN balonları kalkar, aynı metin aynı
+     * `pick` ve aynı `onay` ile gider (M-E1.5.6). Sunucunun bekleyen yazmayı bir kez tüketmesi çift kaydı önler.
+     */
+    fun retryLast() {
+        if (isStreaming || lastUserText.isEmpty()) return
+        val metin = lastUserText
+        val pick = lastPick
+        val onay = lastOnay
+        val liste = messages.toMutableList()
+        if (liste.lastOrNull()?.role == AgentRole.assistant) {
+            liste.removeAt(liste.lastIndex)
+            val onceki = liste.lastOrNull()
+            if (onceki != null && onceki.role == AgentRole.user && onceki.content == metin) liste.removeAt(liste.lastIndex)
+        }
+        messages = liste
+        sendMessage(metin, pick = pick, onay = onay)
+    }
+
+    /**
+     * 402 (ya da kredi kodlu SSE `error`) → balon: Türkçe metin + kredi kartı. Tek yol; sohbet ve Tedavi Planı aynı
+     * alanı okur. Bakiye göstergesi tazelenir.
      */
     private fun applyCreditRequired(credit: CreditRequired, assistantId: UUID) {
         update(assistantId) {
-            it.copy(isError = true, creditRequired = credit, content = credit.message, thinkingText = null)
-        }
-        val available = credit.availableCredits
-        if (credit.kind == CreditRequired.Kind.insufficient && available != null) {
-            lastAvailableCredits = available
+            val m = it.copy(isError = true, creditRequired = credit, content = credit.message, thinkingText = null)
+            // Tur ortasında kredi bitti: o tura ait yarım çıktı ÇİZİLMEZ (sunucu yazma yapmadı).
+            if (credit.yarida) {
+                m.copy(writePreview = null, choiceSet = null, charts = emptyList(), excelFiles = emptyList(), toolSteps = emptyList())
+            } else {
+                m
+            }
         }
         SmileCreditsStore.shared.noteBalanceChanged()
     }
 
-    private fun update(id: UUID, mutate: (AgentMessage) -> AgentMessage) {
+    /** Akan mesaj listenin sonundadır — arama sondan başlar. */
+    private inline fun update(id: UUID, mutate: (AgentMessage) -> AgentMessage) {
         val list = messages
-        val idx = list.indexOfFirst { it.id == id }
+        val idx = list.indexOfLast { it.id == id }
         if (idx < 0) return
         messages = list.toMutableList().also { it[idx] = mutate(it[idx]) }
     }
@@ -440,16 +512,25 @@ class AgentSessionManager {
             messages = messages.toMutableList().also { it[idx] = it[idx].copy(streaming = false, thinkingText = null) }
         }
         isStreaming = false
+        queuedChoice = null
     }
 
     // MARK: - Write confirm
 
-    fun confirmWrite(doubleConfirm: Boolean) {
-        sendMessage(if (doubleConfirm) "Evet, kalıcı olarak onaylıyorum." else "Onayla")
+    /** Ekrandaki bekleyen önizleme (son önizlemeli mesaj). */
+    val bekleyenOnizleme: AgentWritePreview? get() = messages.lastOrNull { it.writePreview != null }?.writePreview
+
+    /** Onay — bugünkü metin AYNEN + `onay {islem:"onayla", onizlemeId}` (27C.2). Süresi dolmuşsa gönderilmez. @return gönderildi mi */
+    fun confirmWrite(doubleConfirm: Boolean): Boolean {
+        val istek = OnayIstegi.kur(OnayIstegi.Islem.onayla, bekleyenOnizleme, doubleConfirm, conversationId) ?: return false
+        sendMessage(istek.metin, onay = istek.onay)
+        return true
     }
 
+    /** Vazgeç — `onay {islem:"vazgec"}` (model çağrılmadan biter). */
     fun cancelWrite() {
-        sendMessage("Vazgeç")
+        val istek = OnayIstegi.kur(OnayIstegi.Islem.vazgec, bekleyenOnizleme, false, conversationId) ?: return
+        sendMessage(istek.metin, onay = istek.onay)
     }
 
     // MARK: - Sesli dikte (kompozeri doldurur, otomatik GÖNDERMEZ; kullanıcı düzeltip gönderir)
@@ -459,36 +540,37 @@ class AgentSessionManager {
     }
 
     fun startDictation() {
-        if (isStreaming) return
-        if (!speech.isAuthorized) {
-            scope.launch {
-                speech.requestAuthorization()
-                if (speech.isAuthorized) startDictation()
-            }
-            return
-        }
+        if (isStreaming || isListening) return
         // Kompozerde ne varsa onun sonundan devam et.
         dictationBase = draft
-        speech.transcript = ""
+        val s = speech
+        s.autoStopOnSilence = true
         // Uzun sessizlik dinlemeyi kendiliğinden durdurur; metin kalır, hiçbir şey gönderilmez.
-        speech.onAutoStop = { stopDictation() }
-        if (speech.startRecording()) isListening = true
+        s.onAutoStop = { stopDictation() }
+        // 🔴 Canlı metin taslağa AKITILIR.
+        s.onTranscriptChange = { t -> applyDictationTranscript(t) }
+        isListening = true
+        scope.launch {
+            val ok = s.startListening()
+            if (!ok) {
+                isListening = false
+                composerError = s.errorMessage ?: "Mikrofon başlatılamadı."
+            }
+        }
     }
 
     fun stopDictation() {
         if (!isListening) return
         isListening = false
-        speech.stopRecording()
+        speech.stopListening()
+        speech.onTranscriptChange = null
+        speech.onAutoStop = null
         // Yazıya dökülen metin zaten `draft`ta; kullanıcı düzenlesin ya da dikteye devam etsin.
     }
 
-    /**
-     * Canlı dökümü dikte başladığındaki metnin arkasına ekler (mikrofona tekrar basmak ezmez).
-     * Dinleme sürerken `speech.transcript` her değiştiğinde görünüm çağırır.
-     */
-    fun applyDictationTranscript() {
+    /** Canlı dökümü dikte başladığındaki metnin arkasına ekler (mikrofona tekrar basmak ezmez). */
+    fun applyDictationTranscript(t: String) {
         if (!isListening) return
-        val t = speech.transcript
         draft = when {
             dictationBase.isEmpty() -> t
             t.isEmpty() -> dictationBase
@@ -498,13 +580,47 @@ class AgentSessionManager {
 
     // MARK: - Conversations
 
+    /** İlk sayfa (yeniler). Yükleme hatası boş listeyle aynı görünmez (Ek MO.18c). */
     suspend fun loadConversations() {
-        conversations = AgentClient.shared.fetchConversations()
+        if (ornekVeri) return
+        sohbetListeYukleniyor = true
+        try {
+            val sayfa = AgentClient.shared.fetchConversations(page = 1)
+            conversations = sayfa.items
+            sohbetSayfasi = 1
+            sohbetDahaVar = sayfa.dahaVar
+            sohbetListeHatasi = false
+        } catch (e: CancellationException) {
+            sohbetListeYukleniyor = false
+            throw e
+        } catch (e: Exception) {
+            sohbetListeHatasi = !Yetki.reddiMi(e)   // kodsuz 403 → boş liste, kırmızı kart yok (M-E7.5)
+        }
+        sohbetListeYukleniyor = false
+    }
+
+    /** Ek MO.18b — "Daha fazla sohbet": sonraki sayfayı listeye EKLER. */
+    suspend fun dahaFazlaSohbet() {
+        if (!sohbetDahaVar || sohbetListeYukleniyor) return
+        sohbetListeYukleniyor = true
+        try {
+            val sayfa = AgentClient.shared.fetchConversations(page = sohbetSayfasi + 1)
+            val mevcut = conversations.map { it.id }.toHashSet()
+            conversations = conversations + sayfa.items.filter { it.id !in mevcut }
+            sohbetSayfasi += 1
+            sohbetDahaVar = sayfa.dahaVar
+        } catch (e: CancellationException) {
+            sohbetListeYukleniyor = false
+            throw e
+        } catch (e: Exception) {
+            sohbetListeHatasi = !Yetki.reddiMi(e)
+        }
+        sohbetListeYukleniyor = false
     }
 
     fun newChat() {
         stop()
-        if (isListening) { speech.stopRecording(); isListening = false }
+        stopDictation()
         messages = emptyList()
         conversationId = null
         draft = ""
@@ -514,25 +630,101 @@ class AgentSessionManager {
         stop()
         conversationId = conv.id
         scope.launch {
-            val loaded = AgentClient.shared.fetchConversationMessages(conv.id)
-            messages = loaded.map { (role, content) -> AgentMessage(role = role, content = content) }
+            try {
+                val detail = AgentClient.shared.fetchConversationDetail(conv.id)
+                messages = detail.ekranMesajlari()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (sohbetBulunamadiMi(e)) {
+                    // Ayrıntı ucu 404 → sohbet listeden düşer, ekranda O.27C-7.
+                    conversations = conversations.filter { it.id != conv.id }
+                    conversationId = null
+                    messages = listOf(AgentMessage(role = AgentRole.assistant, content = sohbetBulunamadiMetni, isError = true))
+                } else {
+                    composerError = errorText(e)
+                }
+            }
         }
     }
 
+    /**
+     * Excel indirme — süresi dolmuşsa (404) ve mesaj kimliği varsa BİR KEZ yeniden üretilip indirilir (M-E1.5.5).
+     * Canlı akıştaki (kimliksiz) Excel'de yeniden üretim yok (web ile aynı).
+     */
+    suspend fun excelIndir(file: AgentExcelArtifact, uretiliyor: (Boolean) -> Unit = {}): File =
+        try {
+            AgentClient.shared.downloadArtifact(file.downloadUrl, file.filename)
+        } catch (e: AgentClient.AgentError.http) {
+            val mesajId = file.messageId
+            val sira = file.artifactIndex
+            if (e.code != 404 || mesajId == null || sira == null) throw e
+            uretiliyor(true)
+            try {
+                val yeni = AgentClient.shared.regenerateExcel(mesajId, sira)
+                AgentClient.shared.downloadArtifact(yeni.downloadUrl, yeni.filename)
+            } finally {
+                uretiliyor(false)
+            }
+        }
+
     fun deleteConversation(conv: AgentConversation) {
+        // Satır hemen kalkar (kaydırarak silme geri zıplamasın); liste sonra sunucudan yenilenir.
+        conversations = conversations.filter { it.id != conv.id }
         scope.launch {
             AgentClient.shared.deleteConversation(conv.id)
             if (conversationId == conv.id) newChat()
             loadConversations()
         }
     }
+
+    companion object {
+        /** Ek O.27C-7 */
+        const val sohbetBulunamadiMetni = "Sohbet bulunamadı; yeni bir sohbet başlatıldı. Mesajınızı yeniden gönderebilirsiniz."
+
+        /** `ApiException.NetworkError` sarmalını açar. */
+        private fun kok(error: Throwable): Throwable = (error as? ApiException.NetworkError)?.cause ?: error
+
+        /**
+         * Bağlantı hatası mı (`agentOnline = false` için) — M-E1.5.1'in dört kodunun Android karşılığı: ad çözülemedi
+         * (`UnknownHostException`), bağlanılamadı / yol yok / bağlantı koptu (`SocketException` ailesi).
+         * Zaman aşımı bağlantı hatası DEĞİLDİR.
+         */
+        fun baglantiHatasiMi(error: Throwable): Boolean {
+            val e = kok(error)
+            return e is UnknownHostException || e is SocketException
+        }
+
+        /** Sohbet ucunun 404'ü (`E_CONVERSATION_NOT_FOUND`). */
+        fun sohbetBulunamadiMi(error: Throwable): Boolean {
+            val e = error as? AgentClient.AgentError.http ?: return false
+            return e.kod == "E_CONVERSATION_NOT_FOUND" || (e.code == 404 && e.kod == null)
+        }
+
+        /** Ek MO.15 — ham istisna metni ekrana basılmaz; sunucunun cümlesi varsa o (M0-7). */
+        fun errorText(error: Throwable): String {
+            if (error is CancellationException) return ""
+            val e = kok(error)
+            if (e is IOException) {
+                if (e.message?.contains("Canceled", ignoreCase = true) == true) return ""   // istek iptal edildi
+                if (e is InterruptedIOException) {
+                    return "Yanıt çok uzun sürdü. Analitik sorular birkaç dakika sürebilir; tekrar deneyin ya da soruyu sadeleştirin."
+                }
+                if (baglantiHatasiMi(e)) return "Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edin."
+                return "Bağlantı hatası oluştu. Tekrar deneyin."
+            }
+            if (error is AgentClient.AgentError) return error.errorDescription ?: "Bir hata oluştu."
+            return "Bir hata oluştu."
+        }
+    }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 300)
 @Composable
 private fun AgentSessionManagerPreview() {
     val vm = remember {
         AgentSessionManager().apply {
+            ornekVeri = true
             messages = listOf(
                 AgentMessage(role = AgentRole.user, content = "Kritik stok"),
                 AgentMessage(role = AgentRole.assistant, content = "3 ürün kritik seviyede."),

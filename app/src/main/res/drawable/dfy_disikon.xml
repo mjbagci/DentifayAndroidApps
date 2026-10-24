@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/DisIkon.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 9 6 c .5 .5 1.503 .412 3 -.824 m 0 0 q -.332 -.272 -.689 -.626 c -2.306 -2.284 -5.446 -1.837 -6.917 0 C 3.378 5.82 .778 8.98 7.142 20.24 c .264 .466 .789 .76 1.354 .76 c .902 0 1.607 -.72 1.636 -1.56 c .063 -1.782 .408 -3.837 1.868 -3.837 s 1.806 2.055 1.868 3.837 c .029 .84 .734 1.56 1.636 1.56 c .565 0 1.09 -.294 1.354 -.76 c 6.365 -11.261 3.764 -14.42 2.748 -15.69 c -1.471 -1.837 -4.611 -2.284 -6.917 0 q -.357 .353 -.689 .626"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

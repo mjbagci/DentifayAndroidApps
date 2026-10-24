@@ -1,5 +1,6 @@
 package com.dentifay.app.ui
 
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,7 +25,9 @@ import com.dentifay.app.auth.LocalAuthManager
 import com.dentifay.app.core.AppConfig
 import com.dentifay.app.data.DataManager
 import com.dentifay.app.data.LocalDataManager
+import com.dentifay.app.login.KurulumBeklemeView
 import com.dentifay.app.login.LoginView
+import com.dentifay.app.login.SifreBelirlemeView
 import com.dentifay.app.login.SplashView
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.Motion
@@ -69,7 +72,7 @@ fun RootView() {
     var splashAnimDone by remember { mutableStateOf(false) }
     var backgroundTaskDone by remember { mutableStateOf(false) }
     var loginScreenReady by remember { mutableStateOf(false) }
-    var contentOpacity by remember { mutableStateOf(0f) }
+    var contentOpacity by remember { mutableFloatStateOf(0f) }
     val splashProgress = remember { Animatable(0f) }   // 0 → 1: blur 0→18, scale 1→1.1, opacity 1→0
     val contentOffset = remember { Animatable(50f) }
     val scope = rememberCoroutineScope()
@@ -94,7 +97,7 @@ fun RootView() {
         if (AuthManager.rememberSession) {
             AuthManager.restoreCookies()
             authManager.checkSession()
-            if (authManager.isLoggedIn) dataManager.preloadHomeData()
+            if (authManager.isLoggedIn && authManager.kurulumBekleme == null) dataManager.preloadHomeData(authManager.currentUser?.id)
         }
         backgroundTaskDone = true
         dismissSplashIfReady()
@@ -102,6 +105,7 @@ fun RootView() {
 
     DentifayTheme {
         CompositionLocalProvider(LocalAuthManager provides authManager, LocalDataManager provides dataManager) {
+          PencereSaglayici {
           com.dentifay.app.theme.CoverHost {
             val density = LocalDensity.current
             Box(Modifier.fillMaxSize()) {
@@ -113,7 +117,15 @@ fun RootView() {
                             translationY = with(density) { contentOffset.value.dp.toPx() }
                         }
                 ) {
-                    if (authManager.isLoggedIn) ContentView() else LoginView(screenReady = loginScreenReady)
+                    val kurulumBekleme = authManager.kurulumBekleme
+                    when {
+                        // Şifre değişikliği zorunlu (AUTH §4): sunucu öteki istekleri 403 ile keser — yalnız şifre ekranı (M-E8.6).
+                        authManager.isLoggedIn && authManager.sifreBelirle -> SifreBelirlemeView(zorunlu = true)
+                        // Kurulumu bitmemiş klinik: sekmeler, ana sayfa, bildirim yoklaması, asistan ve veri isteği KURULMAZ (M-E5.4).
+                        authManager.isLoggedIn && kurulumBekleme != null -> KurulumBeklemeView(yapabilir = kurulumBekleme)
+                        authManager.isLoggedIn -> ContentView()
+                        else -> LoginView(screenReady = loginScreenReady)
+                    }
                 }
 
                 if (showSplash) {
@@ -136,6 +148,7 @@ fun RootView() {
                     }
                 }
             }
+          }
           }
         }
     }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Eye.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 21.544 11.045 c .304 .426 .456 .64 .456 .955 c 0 .316 -.152 .529 -.456 .955 C 20.178 14.871 16.689 19 12 19 c -4.69 0 -8.178 -4.13 -9.544 -6.045 C 2.152 12.529 2 12.315 2 12 c 0 -.316 .152 -.529 .456 -.955 C 3.822 9.129 7.311 5 12 5 c 4.69 0 8.178 4.13 9.544 6.045 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5" />
+    <path
+        android:pathData="M 15 12 a 3 3 0 1 0 -6 0 a 3 3 0 0 0 6 0 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5" />
+</vector>

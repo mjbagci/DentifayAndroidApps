@@ -46,9 +46,10 @@ Sırayla ilerleyin. `▶ KOPYALA` kutularındaki metinler forma doğrudan yapı�
 3. **Canlı sunucu güncel olmalı.** Yayın sürümü yalnız `dentifay.com`'a bağlanır. Mobilin kullandığı uçlar
    (misafir deneme `/api/public/trial`, gülüş simülasyonu, röntgen servisi, asistan) canlıda çalışmalı.
    Şu an canlıda `/api/public/trial` 404 dönüyor. ⚠ SİZDEN: son backend'i canlıya alın.
-4. **İnceleme için demo hesabı.** Uygulama giriş istediğinden Google inceleme ekibine kullanıcı adı/şifre
-   verilmeli. ⚠ SİZDEN: canlıda örnek verili bir klinik + bir kullanıcı açın
-   (ör. `play-review@dentifay.com`). Gerçek hasta verisi OLMASIN.
+4. **İnceleme için demo hesabı.** Uygulama giriş istediğinden Google inceleme ekibine giriş bilgisi
+   verilmeli. Giriş kimliği **telefon numarasıdır** (web ile aynı; e-posta yalnız telefonsuz eski hesaplarda
+   geçer). ⚠ SİZDEN: canlıda örnek verili bir klinik + telefon numarası ve şifresi olan bir kullanıcı açın.
+   Gerçek hasta verisi OLMASIN.
 
 ---
 
@@ -112,10 +113,16 @@ Play Console → **Uygulama oluştur**:
 > Dentifay, diş kliniklerinin günlük işini tek yerden yürüten klinik yönetim yazılımının mobil uygulamasıdır. Dentifay hesabı olan klinik ekipleri için tasarlanmıştır.
 >
 > RANDEVULAR
-> • Günün programını hekim hekim takvim görünümünde görün
+> • Günün programını hekim hekim takvim görünümünde görün; uygulama hekimin kendi programıyla açılır
 > • Randevu ayrıntısı: hasta, işlem, şikâyet, notlar
 > • Tek dokunuşla "Hasta geldi", tedaviye alma, iptal ve gelmedi işaretleme
+> • Yeni randevu oluşturma; hekim çakışmasında uyarı
 > • Hastayı arama ya da mesaj gönderme
+>
+> HASTA VE TEDAVİ PLANI
+> • Hasta sayfası: Planlama, Yapılacak, Yapılan ve Medya sekmeleri
+> • Diş şemasıyla tedavi planı hazırlama ve düzenleme, indirim, ödeme planı
+> • Planı yazdırma / PDF; WhatsApp, SMS ya da e-postayla paylaşma
 >
 > STOK YÖNETİMİ
 > • Tüm malzemeler, düşük ve tükenen stok uyarıları
@@ -125,11 +132,14 @@ Play Console → **Uygulama oluştur**:
 > • Röntgen Analizi: panoramik röntgeni çekin ya da yükleyin; dişler FDI numarasıyla işaretlenir, her bulgu için güven skoru ve tedavi önerisi çıkar. Karar her zaman hekimindir.
 > • Gülüş Simülasyonu: rehberli çekimle hastanın gülüşünü fotoğraflayın, tasarımı seçin; tedavi sonrası görünümün önce/sonra simülasyonunu hastayla paylaşın.
 > • Sesli Tedavi Planı: planı sesle söyleyin, kalemlere ayrılsın ve onayınızla kaydedilsin.
-> • Dentifay Asistan: kliniğinizin verisi hakkında soru sorun ("Bu ayın cirosu ne?"), yanıtı tablo, grafik ya da Excel olarak alın. Sesli konuşma modu da vardır.
+> • Dentifay Asistan: kliniğinizin verisi hakkında soru sorun ("Bu ayın cirosu ne?"), yanıtı tablo, grafik ya da Excel olarak alın. Soruyu sesle de yazdırabilirsiniz.
 >
 > KREDİLER
-> • Kalan kredi, kalite başına maliyet ve paketler
+> • Kalan kredi ve işlem başına kredi bedeli
 > • Kredi yönetimi: kim, ne zaman, ne kadar kullandı; kişi bazlı aylık limitler
+>
+> TABLET
+> • Tabletlerde yan gezinme ve iki bölmeli düzen; yatay ve dikey kullanım
 >
 > GÜVENLİK
 > • Yüz tanıma / parmak iziyle hızlı giriş
@@ -148,7 +158,8 @@ Play Console → **Uygulama oluştur**:
 |---|---|---|
 | Uygulama simgesi 512×512 | `simge-512.png` | ✅ hazır |
 | Öne çıkan grafik 1024×500 | `kapak-1024x500.png` | ✅ hazır |
-| Telefon ekran görüntüleri (2–8 adet, 9:16) | — | ⏳ hazırlanacak |
+| Telefon ekran görüntüleri (5 adet, 1080×2160, alfa kanalsız PNG) | `ekran-goruntuleri/telefon-1-giris.png` … `telefon-5-tedavi-plani.png` | ✅ hazır (örnek klinik verisi; hasta telefonları yer tutucu) |
+| 7 inç ve 10 inç tablet ekran görüntüleri (tablet listesinde görünmek için önerilir) | — | ⏳ çekilecek (tablet düzeni test edildi; emülatör düşük bellekte çöktüğü için görüntü alınamadı) |
 
 **Kategori ve iletişim** (Mağaza ayarları):
 | Alan | Değer |
@@ -167,9 +178,9 @@ Play Console → **Uygulama oluştur**:
 
 **6.2 Uygulamaya erişim:** "Tüm işlevler veya bazı işlevler kısıtlı" → talimat ekle:
 - Ad: `İnceleme hesabı`
-- Kullanıcı adı: ⚠ SİZDEN (§1-4) · Şifre: ⚠ SİZDEN
+- Kullanıcı adı: **telefon numarası** (giriş ekranındaki "Telefon numarası" alanı) ⚠ SİZDEN (§1-4) · Şifre: ⚠ SİZDEN
 - Diğer talimatlar ▶ KOPYALA:
-  > Uygulama, Dentifay klinik hesabı olan ekipler içindir. Verilen hesapla giriş yapın. Giriş ekranındaki "Ücretsiz deneyin" kartları (Röntgen Analizi, Gülüş Simülasyonu) giriş yapmadan da denenebilir. Kamera izni röntgen ve gülüş fotoğrafı, mikrofon izni sesli tedavi planı ve sesli asistan içindir.
+  > Uygulama, Dentifay klinik hesabı olan ekipler içindir. Giriş ekranında verilen telefon numarasını ve şifreyi girin. Giriş ekranındaki "Ücretsiz deneyin" kartları (Röntgen Analizi, Gülüş Simülasyonu) giriş yapmadan da denenebilir. Kamera izni röntgen ve gülüş fotoğrafı, mikrofon izni sesli tedavi planı ve asistana sesle yazdırma içindir.
 
 **6.3 Reklamlar:** Hayır, uygulamada reklam yok.
 
@@ -219,10 +230,10 @@ Toplanan veri türleri (hepsi **Toplanıyor**, **Paylaşılmıyor**, **Zorunlu**
 2. **Play Uygulama İmzalama**: "Devam et / Google tarafından oluşturulan anahtarı kullan" → kabul.
    (Bizim `dentifay-release.jks` anahtarımız "yükleme anahtarı" olur.)
 3. App bundle yükleyin: `app/build/outputs/bundle/release/app-release.aab`
-4. Sürüm adı: `1.0 (1)` · Sürüm notları ▶ KOPYALA:
+4. Sürüm adı: `1.1 (2)` (1.0 mağazaya hiç yüklenmediyse ilk yükleme de 1.1 olabilir) · Sürüm notları ▶ KOPYALA:
    ```
    <tr-TR>
-   Dentifay Android ilk sürüm: randevular, stok, röntgen analizi, gülüş simülasyonu, sesli tedavi planı, Dentifay Asistan ve kredi yönetimi.
+   Dentifay Android: randevular (yeni randevu, çakışma uyarısı), hasta sayfası ve tedavi planı (diş şeması, düzenleme, yazdırma, ödeme planı), stok, röntgen analizi, gülüş simülasyonu, sesli tedavi planı, Dentifay Asistan ve kredi yönetimi. Tablet ve yatay ekran desteği.
    </tr-TR>
    ```
 5. **Ülkeler/bölgeler:** Türkiye (sonra istediklerinizi ekleyin).
@@ -239,7 +250,7 @@ Toplanan veri türleri (hepsi **Toplanıyor**, **Paylaşılmıyor**, **Zorunlu**
 - [ ] `dentifay.com/hesap-silme` canlı
 - [ ] Canlı sunucu son sürümde (misafir deneme, röntgen, gülüş, asistan çalışıyor)
 - [ ] İnceleme demo hesabı hazır
-- [ ] Ekran görüntüleri yüklendi
+- [ ] Ekran görüntüleri yüklendi (telefon: `play-store/gorseller/ekran-goruntuleri/`; tablet: çekilecek)
 - [ ] Mağaza girişi + Uygulama içeriği bölümlerinin hepsi yeşil tik
 - [ ] `.aab` yüklendi, incelemeye gönderildi
 - [ ] `dentifay-release.jks` + `keystore.properties` yedeklendi (USB + şifre yöneticisi)
@@ -251,7 +262,8 @@ Sonraki güncellemelerde: `app/build.gradle.kts` → `versionCode` +1, `versionN
 
 ## 9) Yayınlamadan bir arkadaşın telefonunda denemek
 
-Hazır dosya: **Masaüstü → `Dentifay-Android-1.0.apk`** (yayın sürümü, imzalı, 65 MB).
+Hazır dosya: **Masaüstü → `Dentifay-Android-1.1.apk`** (yayın sürümü 1.1, imzalı, 65 MB — eski
+`Dentifay-Android-1.0.apk` artık gereksiz).
 Bu sürüm yalnız **canlı sunucuya (dentifay.com)** bağlanır → arkadaşınızın canlıda bir Dentifay
 hesabı olmalı (ya da giriş yapmadan "Ücretsiz deneyin" kartlarını dener).
 
@@ -282,7 +294,8 @@ anahtarıyla derleniyor. Kaldırmak: simgeye basılı tut → Kaldır.
    adb shell am start -n com.dentifay.app/.MainActivity --es DENTIFAY_API_HOST http://<Mac'in Wi-Fi IP'si>:3001
    ```
    (Mac IP'si: `ipconfig getifaddr en0`). Canlıya geri dönmek için aynı komutta değer `prod`.
-   Giriş için web projesindeki `prisma/seed.js` test hesaplarını kullanın.
+   Giriş: **telefon numarası + şifre** — web projesindeki `prisma/seed.js` test hesapları (seed bitince
+   konsola yazdırdığı "Login credentials" listesi).
 
 ### Yol C — Play Console "Dahili test" (hesap açıldıktan sonra, en düzgünü)
 1. Play Console → Uygulamanız → **Test → Dahili test** → **Testçiler** sekmesi → e-posta listesi oluşturun,
@@ -296,6 +309,7 @@ anahtarıyla derleniyor. Kaldırmak: simgeye basılı tut → Kaldır.
 ### Arkadaşınızın denemesini istediğim şeyler (emülatörde test edilemeyenler)
 - Gerçek bir panoramik röntgen fotoğrafıyla **Röntgen Analizi** (sonuç ekranı)
 - **Gülüş Simülasyonu**: rehberli kamera çekimi + 1 adet "Orta" kalite üretim (4 kredi)
-- **Sesli Tedavi Planı** ve **sesli asistan** (gerçek konuşma)
+- **Sesli Tedavi Planı** ve asistana **sesle yazdırma** (gerçek konuşma)
 - Parmak izi / yüz tanıma ile giriş
 - Uygulamanın akıcılığı (yayın sürümü emülatörden çok daha hızlıdır)
+- Tablet varsa: yatay ve dikey düzen (yan gezinme, iki bölmeli hasta listesi)

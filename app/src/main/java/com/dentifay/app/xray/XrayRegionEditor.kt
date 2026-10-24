@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -31,10 +32,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -50,35 +51,42 @@ import androidx.compose.ui.unit.dp
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.Haptics
 import com.dentifay.app.theme.Motion
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+private val koseAdlari = listOf("Sol üst köşe", "Sağ üst köşe", "Sağ alt köşe", "Sol alt köşe")
 
 /**
  * Röntgen alanı seçimi — gülüş simülasyonundaki ağız seçiminin röntgen karşılığı.
  * Köşeler otomatik ayrıştırılan röntgenin kenarına oturmuş gelir; hekim dört köşeyi
  * sürükleyerek düzeltir (sürüklerken büyüteç açılır). Seçilen dörtgen perspektifi
  * düzeltilerek analize gider; dışındaki ekran arayüzü, çerçeve ve masa analize karışmaz.
+ *
+ * Görsel, verilen alana en-boy oranı korunarak sığdırılır (telefon, tablet dikey/yatay, bölünmüş pencere).
+ * `image` ekranda gösterilecek (küçültülmüş) kopyadır; köşeler normalize olduğundan asıl görselle aynıdır.
+ * `quad` sağlayıcıdır: sürükleme sırasında yalnız çizim ve yerleşim yenilenir, ekran yeniden kurulmaz.
  */
 @Composable
-fun XrayRegionEditor(image: Bitmap, quad: XrayQuad, onQuadChange: (XrayQuad) -> Unit, modifier: Modifier = Modifier) {
+fun XrayRegionEditor(image: Bitmap, quad: () -> XrayQuad, onQuadChange: (XrayQuad) -> Unit, modifier: Modifier = Modifier) {
     var dragging by remember { mutableStateOf<Int?>(null) }
-    var fingerInView by remember { mutableStateOf(Offset.Zero) }
-    var lastDragged by remember { mutableStateOf(0) }
+    // Parmağın yeri yalnız büyütecin yerleşiminde (layout evresi) okunur.
+    val fingerInView = remember { mutableStateOf(Offset.Zero) }
+    var lastDragged by remember { mutableIntStateOf(0) }
     val bmp = remember(image) { image.asImageBitmap() }
     val density = LocalDensity.current
-    val labels = listOf("Sol üst köşe", "Sağ üst köşe", "Sağ alt köşe", "Sol alt köşe")
+    val currentQuad by rememberUpdatedState(quad)
+    val currentOnChange by rememberUpdatedState(onQuadChange)
 
     BoxWithConstraints(modifier) {
         val boxW = constraints.maxWidth.toFloat()
         val boxH = constraints.maxHeight.toFloat()
         val fit = xrayFitRect(Size(image.width.toFloat(), image.height.toFloat()), Size(boxW, boxH), with(density) { 18.dp.toPx() })
-        val pts = quad.points.map { Offset(fit.left + it.x * fit.width, fit.top + it.y * fit.height) }
-        val currentQuad by rememberUpdatedState(quad)
         val currentFit by rememberUpdatedState(fit)
-        val currentOnChange by rememberUpdatedState(onQuadChange)
         val touchRadius = with(density) { 22.dp.toPx() }
+        fun toView(p: Offset, f: Rect = fit) = Offset(f.left + p.x * f.width, f.top + p.y * f.height)
 
         Box(
             Modifier
@@ -87,19 +95,19 @@ fun XrayRegionEditor(image: Bitmap, quad: XrayQuad, onQuadChange: (XrayQuad) -> 
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val f = currentFit
-                        val handles = currentQuad.points.map { Offset(f.left + it.x * f.width, f.top + it.y * f.height) }
+                        val handles = currentQuad().points.map { Offset(f.left + it.x * f.width, f.top + it.y * f.height) }
                         val idx = handles.indices.minByOrNull { (handles[it] - down.position).getDistance() } ?: return@awaitEachGesture
                         if ((handles[idx] - down.position).getDistance() > touchRadius) return@awaitEachGesture
                         down.consume()
                         fun update(pos: Offset) {
-                            if (dragging != idx) { dragging = idx; Haptics.selection() }
-                            fingerInView = pos
+                            if (dragging != idx) { dragging = idx; lastDragged = idx; Haptics.selection() }
+                            fingerInView.value = pos
                             val ff = currentFit
                             val p = Offset(
                                 ((pos.x - ff.left) / ff.width).coerceIn(0f, 1f),
                                 ((pos.y - ff.top) / ff.height).coerceIn(0f, 1f),
                             )
-                            val q = currentQuad.with(idx, p)
+                            val q = currentQuad().with(idx, p)
                             if (q.isValid) currentOnChange(q)
                         }
                         update(down.position)
@@ -115,17 +123,17 @@ fun XrayRegionEditor(image: Bitmap, quad: XrayQuad, onQuadChange: (XrayQuad) -> 
                 },
         ) {
             val guideAlpha by animateFloatAsState(if (dragging == null) 0.14f else 0.28f, Motion.easeOut(120), label = "guides")
+            // Sürüklerken her karede çizilir: yollar bir kez ayrılır, yeniden kullanılır.
+            val dimP = remember { Path() }
+            val guides = remember { Path() }
+            val edge = remember { Path() }
             Canvas(Modifier.fillMaxSize()) {
-                drawImage(
-                    bmp, srcOffset = IntOffset.Zero, srcSize = IntSize(bmp.width, bmp.height),
-                    dstOffset = IntOffset(fit.left.roundToInt(), fit.top.roundToInt()),
-                    dstSize = IntSize(fit.width.roundToInt(), fit.height.roundToInt()),
-                    filterQuality = FilterQuality.High,
-                )
+                val pts = currentQuad().points.map { toView(it) }
+                drawFitted(bmp, fit)
                 // Alan dışını karart
-                drawPath(dimPath(fit, pts), Color.Black.copy(alpha = 0.58f))
+                drawPath(dimPath(fit, pts, dimP), Color.Black.copy(alpha = 0.58f))
                 // Üçte bir kılavuz çizgileri (alan içinde)
-                val guides = Path()
+                guides.reset()
                 for (t in listOf(1f / 3, 2f / 3)) {
                     lerp(pts[0], pts[3], t).let { guides.moveTo(it.x, it.y) }
                     lerp(pts[1], pts[2], t).let { guides.lineTo(it.x, it.y) }
@@ -133,30 +141,32 @@ fun XrayRegionEditor(image: Bitmap, quad: XrayQuad, onQuadChange: (XrayQuad) -> 
                     lerp(pts[3], pts[2], t).let { guides.lineTo(it.x, it.y) }
                 }
                 drawPath(guides, Color.White.copy(alpha = guideAlpha), style = Stroke(0.8.dp.toPx()))
-                drawPath(quadPath(pts), DS.Colors.cyan400, style = Stroke(2.dp.toPx(), join = StrokeJoin.Round))
+                drawPath(quadPath(pts, edge), DS.Colors.cyan400, style = Stroke(2.dp.toPx(), join = StrokeJoin.Round))
             }
 
             for (i in 0 until 4) {
-                val active = dragging == i
                 XrayRegionHandle(
-                    active,
+                    dragging == i,
                     Modifier
-                        .offset { IntOffset((pts[i].x - 22.dp.toPx()).roundToInt(), (pts[i].y - 22.dp.toPx()).roundToInt()) }
-                        .semantics { contentDescription = labels[i] },
+                        .offset {
+                            val p = toView(currentQuad()[i])
+                            IntOffset((p.x - 22.dp.toPx()).roundToInt(), (p.y - 22.dp.toPx()).roundToInt())
+                        }
+                        .semantics { contentDescription = koseAdlari[i] },
                 )
             }
 
-            val di = dragging
-            if (di != null) lastDragged = di
             AnimatedVisibility(
-                visible = di != null,
+                visible = dragging != null,
                 enter = fadeIn(Motion.easeOut(120)), exit = fadeOut(Motion.easeOut(120)),
             ) {
                 val i = lastDragged
-                val pos = loupePosition(fingerInView, boxW, with(density) { 72.dp.toPx() })
                 XrayLoupe(
-                    bmp, quad[i], fit,
-                    Modifier.offset { IntOffset((pos.x - 58.dp.toPx()).roundToInt(), (pos.y - 58.dp.toPx()).roundToInt()) },
+                    bmp, { currentQuad()[i] }, fit,
+                    Modifier.offset {
+                        val pos = loupePosition(fingerInView.value, boxW, 72.dp.toPx())
+                        IntOffset((pos.x - 58.dp.toPx()).roundToInt(), (pos.y - 58.dp.toPx()).roundToInt())
+                    },
                 )
             }
         }
@@ -178,9 +188,9 @@ private fun XrayRegionHandle(active: Boolean, modifier: Modifier) {
     }
 }
 
-/** Parmağın altındaki bölgeyi 3× gösteren büyüteç (artı işaretli). */
+/** Parmağın altındaki bölgeyi 3× gösteren büyüteç (artı işaretli). Merkez çizimde okunur. */
 @Composable
-private fun XrayLoupe(bmp: ImageBitmap, center: Offset, fit: Rect, modifier: Modifier) {
+private fun XrayLoupe(bmp: ImageBitmap, center: () -> Offset, fit: Rect, modifier: Modifier) {
     val zoom = 3f
     Box(
         modifier
@@ -192,11 +202,12 @@ private fun XrayLoupe(bmp: ImageBitmap, center: Offset, fit: Rect, modifier: Mod
         Canvas(Modifier.fillMaxSize()) {
             val size = this.size.width
             val w = fit.width * zoom; val h = fit.height * zoom
+            val c0 = center()
             drawRect(Color.Black)
             drawImage(
                 bmp, srcOffset = IntOffset.Zero, srcSize = IntSize(bmp.width, bmp.height),
-                dstOffset = IntOffset((size / 2 - center.x * w).roundToInt(), (size / 2 - center.y * h).roundToInt()),
-                dstSize = IntSize(w.roundToInt(), h.roundToInt()),
+                dstOffset = IntOffset((size / 2 - c0.x * w).roundToInt(), (size / 2 - c0.y * h).roundToInt()),
+                dstSize = IntSize(w.roundToInt().coerceAtLeast(1), h.roundToInt().coerceAtLeast(1)),
                 filterQuality = FilterQuality.High,
             )
             val c = size / 2; val l = 14.dp.toPx()
@@ -215,14 +226,16 @@ private fun loupePosition(finger: Offset, width: Float, inset: Float): Offset {
 
 private fun lerp(a: Offset, b: Offset, t: Float) = Offset(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 
-internal fun quadPath(pts: List<Offset>): Path = Path().apply {
+internal fun quadPath(pts: List<Offset>, into: Path = Path()): Path = into.apply {
+    reset()
     moveTo(pts[0].x, pts[0].y)
     pts.drop(1).forEach { lineTo(it.x, it.y) }
     close()
 }
 
 /** Dış dikdörtgen + dörtgen (çift-tek doldurma = dörtgen dışı). */
-internal fun dimPath(fit: Rect, pts: List<Offset>): Path = Path().apply {
+internal fun dimPath(fit: Rect, pts: List<Offset>, into: Path = Path()): Path = into.apply {
+    reset()
     fillType = PathFillType.EvenOdd
     addRect(fit)
     moveTo(pts[0].x, pts[0].y)
@@ -230,7 +243,7 @@ internal fun dimPath(fit: Rect, pts: List<Offset>): Path = Path().apply {
     close()
 }
 
-/** Görseli kutuya sığdıran dikdörtgen (px). */
+/** Görseli kutuya sığdıran dikdörtgen (px) — en-boy oranı korunur, kutuda ortalanır. */
 internal fun xrayFitRect(image: Size, box: Size, padding: Float = 0f): Rect {
     val aw = max(1f, box.width - padding * 2); val ah = max(1f, box.height - padding * 2)
     val s = min(aw / max(image.width, 1f), ah / max(image.height, 1f))
@@ -261,16 +274,25 @@ internal fun DrawScope.drawFitted(bmp: ImageBitmap, r: Rect) {
     )
 }
 
+@Composable
+private fun XrayRegionEditorOrnek() {
+    val bmp = remember {
+        Bitmap.createBitmap(800, 420, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.DKGRAY) }
+    }
+    var quad by remember {
+        mutableStateOf(XrayQuad(Offset(0.08f, 0.1f), Offset(0.92f, 0.06f), Offset(0.95f, 0.9f), Offset(0.05f, 0.94f)))
+    }
+    XrayRegionEditor(bmp, { quad }, { quad = it }, Modifier.fillMaxSize())
+}
+
 @Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 390, heightDp = 844)
 @Composable
 private fun XrayRegionEditorPreview() {
-    PreviewEnv {
-        val bmp = remember {
-            Bitmap.createBitmap(800, 420, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.DKGRAY) }
-        }
-        var quad by remember {
-            mutableStateOf(XrayQuad(Offset(0.08f, 0.1f), Offset(0.92f, 0.06f), Offset(0.95f, 0.9f), Offset(0.05f, 0.94f)))
-        }
-        XrayRegionEditor(bmp, quad, { quad = it }, Modifier.fillMaxSize())
-    }
+    PreviewEnv { XrayRegionEditorOrnek() }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun XrayRegionEditorTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) { XrayRegionEditorOrnek() }
 }

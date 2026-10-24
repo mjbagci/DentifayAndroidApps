@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/BarChart3.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 14 20.5 V 4.25 C 14 3.52169 13.9984 3.05091 13.9518 2.70403 C 13.908 2.37872 13.8374 2.27676 13.7803 2.21967 C 13.7232 2.16258 13.6213 2.09197 13.296 2.04823 C 12.9491 2.00159 12.4783 2 11.75 2 C 11.0217 2 10.5509 2.00159 10.204 2.04823 C 9.87872 2.09197 9.77676 2.16258 9.71967 2.21967 C 9.66258 2.27676 9.59197 2.37872 9.54823 2.70403 C 9.50159 3.05091 9.5 3.52169 9.5 4.25 V 20.5 H 14 Z"
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd" />
+    <path
+        android:pathData="M 1.75 20.5 H 3.5 V 8.75 C 3.5 8.33579 3.83579 8 4.25 8 H 7.25 C 7.66421 8 8 8.33579 8 8.75 V 20.5 H 15.5 V 13.75 C 15.5 13.3358 15.8358 13 16.25 13 H 19.25 C 19.6642 13 20 13.3358 20 13.75 V 20.5 H 21.75 C 22.1642 20.5 22.5 20.8358 22.5 21.25 C 22.5 21.6642 22.1642 22 21.75 22 H 1.75 C 1.33579 22 1 21.6642 1 21.25 C 1 20.8358 1.33579 20.5 1.75 20.5 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+</vector>

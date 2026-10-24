@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -40,6 +41,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
@@ -53,14 +55,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import com.dentifay.app.R
 import com.dentifay.app.theme.DS
 import com.dentifay.app.theme.Motion
 import com.dentifay.app.theme.plainClickable
 import com.dentifay.app.theme.sys
 import com.dentifay.app.theme.upperTr
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import kotlin.math.max
 
@@ -69,29 +74,41 @@ import kotlin.math.max
 /**
  * Fotoğrafı gösterir; yapay zekaya gidecek bölge dışını karartır, diş
  * açıklığı maskesini turkuaz olarak boyar.
+ *
+ * `image` tam çözünürlüklü olabilir: ekrana arka planda küçültülmüş kopyası çizilir (`region` koordinatları tam görseldedir,
+ * çizim oranla ölçeklendiği için kopyanın boyutu fark etmez). `maxHeight`: pencereye sığdırma (Swift `.frame(maxHeight: 420)`).
  */
 @Composable
-internal fun SmileRegionPreview(image: Bitmap, region: MouthRegion, mask: Bitmap?, modifier: Modifier = Modifier) {
-    val img = remember(image) { image.asImageBitmap() }
+internal fun SmileRegionPreview(
+    image: Bitmap,
+    region: MouthRegion,
+    mask: Bitmap?,
+    modifier: Modifier = Modifier,
+    maxHeight: Dp = 420.dp,
+) {
+    val display = rememberSmileDisplayBitmap(image, maxPx = 1600)
+    val img = remember(display) { display?.asImageBitmap() }
     val maskImg = remember(mask) { mask?.asImageBitmap() }
     val pulse by rememberInfiniteTransition(label = "maskPulse")
         .animateFloat(0.3f, 0.55f, infiniteRepeatable(Motion.easeInOut(1400), RepeatMode.Reverse), label = "maskAlpha")
-    val iw = region.imageSize.width.toFloat()
-    val ih = region.imageSize.height.toFloat()
+    val iw = region.imageSize.width
+    val ih = region.imageSize.height
     val shape = RoundedCornerShape(22.dp)
     Box(modifier, contentAlignment = Alignment.Center) {
         Box(
             Modifier
-                .heightIn(max = 420.dp)
+                .heightIn(max = maxHeight)
                 .aspectRatio(iw / max(ih, 1f))
                 .clip(shape)
+                .background(Color.White.copy(alpha = 0.04f))
                 .border(1.dp, Color.White.copy(alpha = 0.1f), shape)
                 .semantics { contentDescription = "Fotoğraf; yalnızca işaretli ağız bölgesi işlenecek" }
         ) {
-            Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+            if (img != null) Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
             Canvas(Modifier.fillMaxSize()) {
                 val dst = IntSize(size.width.toInt(), size.height.toInt())
                 if (maskImg != null) {
+                    // `pulse` yalnız çizimde okunur — her karede yeniden düzen/kompozisyon yok.
                     drawImage(maskImg, dstSize = dst, colorFilter = ColorFilter.tint(DS.Colors.cyan400.copy(alpha = pulse), BlendMode.SrcIn))
                 }
                 val scale = size.width / max(iw, 1f)
@@ -118,14 +135,12 @@ internal fun SmileRegionPreview(image: Bitmap, region: MouthRegion, mask: Bitmap
 internal fun SmileScanOverlay(modifier: Modifier = Modifier) {
     val phase by rememberInfiniteTransition(label = "scan")
         .animateFloat(-0.2f, 0.85f, infiniteRepeatable(Motion.easeInOut(1800), RepeatMode.Reverse), label = "scanPhase")
+    val colors = remember { listOf(Color.Transparent, DS.Colors.cyan400.copy(alpha = 0.35f), Color.Transparent) }
     Canvas(modifier) {
         val bandH = size.height * 0.35f
         val top = phase * size.height
         drawRect(
-            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                listOf(Color.Transparent, DS.Colors.cyan400.copy(alpha = 0.35f), Color.Transparent),
-                startY = top, endY = top + bandH,
-            ),
+            brush = Brush.verticalGradient(colors, startY = top, endY = top + bandH),
             topLeft = Offset(0f, top),
             size = Size(size.width, bandH),
             blendMode = BlendMode.Screen,
@@ -135,21 +150,34 @@ internal fun SmileScanOverlay(modifier: Modifier = Modifier) {
 
 // MARK: - Önce / sonra (paylaşılan görselle aynı düzen)
 
-/** Gülüş (yatay) alt alta, tüm yüz yan yana; etiketli. */
+/**
+ * Gülüş (yatay) alt alta, tüm yüz yan yana; etiketli (Swift `ComparisonView`).
+ *
+ * Tablet/yatay pencerede sabit kural küçük kareler bırakabilir: iki diziliş de ölçülür ve karoları BÜYÜK olan seçilir —
+ * telefonda dikeyde sonuç Swift'le aynıdır (yatay gülüş alt alta, dikey yüz yan yana), geniş pencerede yan yana.
+ */
 @Composable
 internal fun SmileComparisonView(before: Bitmap, after: Bitmap, caption: String, modifier: Modifier = Modifier) {
-    val stacked = before.width > before.height
     val sem = Modifier.semantics(mergeDescendants = true) { contentDescription = "Önce ve sonra karşılaştırması: $caption" }
-    val afterLabel = "SONRA · ${caption.upperTr()}"
-    if (stacked) {
-        Column(modifier.fillMaxSize().then(sem), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ComparisonTile(before, "ÖNCE", false, Modifier.weight(1f).fillMaxWidth())
-            ComparisonTile(after, afterLabel, true, Modifier.weight(1f).fillMaxWidth())
-        }
-    } else {
-        Row(modifier.fillMaxSize().then(sem), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ComparisonTile(before, "ÖNCE", false, Modifier.weight(1f).fillMaxSize())
-            ComparisonTile(after, afterLabel, true, Modifier.weight(1f).fillMaxSize())
+    val afterLabel = remember(caption) { "SONRA · ${caption.upperTr()}" }
+    val ratio = before.width.toFloat() / max(before.height, 1).toFloat()
+    BoxWithConstraints(modifier.fillMaxSize().then(sem)) {
+        val gap = 8.dp
+        // Alt alta: her karo tam genişlik, yüksekliğin yarısı; yan yana: yarım genişlik, tam yükseklik.
+        val stackedW = min(maxWidth, (maxHeight - gap) / 2 * ratio)
+        val sideW = min((maxWidth - gap) / 2, maxHeight * ratio)
+        val portraitDefault = before.width <= before.height
+        val stacked = if (portraitDefault) stackedW > sideW * 1.08f else stackedW * 1.08f >= sideW
+        if (stacked) {
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                ComparisonTile(before, "ÖNCE", false, Modifier.weight(1f).fillMaxWidth())
+                ComparisonTile(after, afterLabel, true, Modifier.weight(1f).fillMaxWidth())
+            }
+        } else {
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                ComparisonTile(before, "ÖNCE", false, Modifier.weight(1f).fillMaxSize())
+                ComparisonTile(after, afterLabel, true, Modifier.weight(1f).fillMaxSize())
+            }
         }
     }
 }
@@ -182,27 +210,27 @@ private fun ComparisonTile(image: Bitmap, label: String, highlight: Boolean, mod
 
 // MARK: - Karşılaştır sayfası
 
-/** Tüm sonuçlar ızgarada (yakın plan); dokununca o sonuç seçilir. */
+/** Tüm sonuçlar ızgarada (yakın plan); dokununca o sonuç seçilir. Karolar arka planda küçültülür. */
 @Composable
 internal fun SmileCompareSheet(vm: SmileSimulationViewModel, onDismiss: () -> Unit) {
     val zoomRect = vm.zoomRect()
-    fun zoomed(b: Bitmap): Bitmap = b.croppedTo(zoomRect) ?: b
     Column(Modifier.fillMaxSize().background(DS.Colors.background)) {
         SmileInlineNavBar("Karşılaştır", onTrailing = onDismiss)
         val done = vm.jobs.filter { it.result != null }
         LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
+            // Telefonda iki sütun (Swift), geniş sayfada üç.
+            columns = GridCells.Adaptive(minSize = 150.dp),
             contentPadding = PaddingValues(16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
             vm.original?.let { before ->
-                item(key = "before") { CompareTile("Önce", remember(before, zoomRect) { zoomed(before) }) }
+                item(key = "before", contentType = "tile") { CompareTile("Önce", before, zoomRect) }
             }
-            items(done, key = { it.id.toString() }) { job ->
+            items(done, key = { it.id.toString() }, contentType = { "tile" }) { job ->
                 val res = job.result ?: return@items
-                CompareTile(job.title, remember(res, zoomRect) { zoomed(res) }, Modifier.plainClickable {
+                CompareTile(job.title, res, zoomRect, Modifier.plainClickable {
                     vm.activeJobID = job.id
                     onDismiss()
                 })
@@ -212,14 +240,15 @@ internal fun SmileCompareSheet(vm: SmileSimulationViewModel, onDismiss: () -> Un
 }
 
 @Composable
-private fun CompareTile(title: String, image: Bitmap, modifier: Modifier = Modifier) {
+private fun CompareTile(title: String, image: Bitmap, zoomRect: Rect?, modifier: Modifier = Modifier) {
+    // 120 dp yüksekliğindeki karo için ≈600 px yeter; kırpım + küçültme arka planda.
+    val thumb = rememberSmileDisplayBitmap(image, zoomRect, maxPx = 640)
+    val img = remember(thumb) { thumb?.asImageBitmap() }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Image(
-            remember(image) { image.asImageBitmap() }, null,
-            Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp)),
-            contentScale = ContentScale.Crop,
-        )
-        Text(title, style = sys(12, FontWeight.SemiBold), color = DS.Colors.onSurface)
+        Box(Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.05f))) {
+            if (img != null) Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+        Text(title, style = sys(12, FontWeight.SemiBold), color = DS.Colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -241,5 +270,15 @@ private fun SmileComparisonPreview() {
                 SmileScanOverlay(Modifier.fillMaxSize())
             }
         }
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun SmileComparisonTabletPreview() {
+    PreviewEnv(pencere = PencereBilgisi.TABLET_YATAY) {
+        val b = rememberSampleBitmap(R.drawable.smile_before)
+        val a = rememberSampleBitmap(R.drawable.smile_after)
+        Box(Modifier.padding(20.dp).size(1240.dp, 420.dp)) { SmileComparisonView(b, a, "Doğal Estetik") }
     }
 }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Headphones.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 15 12 a 2 2 0 0 1 2 -2 a 4 4 0 0 1 0 8 a 2 2 0 0 1 -2 -2 z m -6 0 a 2 2 0 0 0 -2 -2 a 4 4 0 0 0 0 8 a 2 2 0 0 0 2 -2 z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5" />
+    <path
+        android:pathData="M 3 14 v -3 a 9 9 0 0 1 18 0 v 4.846 c 0 2.009 0 3.013 -.352 3.796 a 4 4 0 0 1 -2.006 2.006 c -.783 .352 -1.787 .352 -3.796 .352 H 12"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

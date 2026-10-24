@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfycift/AlertCircle.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 22 12 C 22 6.47715 17.5228 2 12 2 C 6.47715 2 2 6.47715 2 12 C 2 17.5228 6.47715 22 12 22 C 17.5228 22 22 17.5228 22 12 Z"
+        android:fillColor="#FF000000"
+        android:fillAlpha="0.500" />
+    <path
+        android:pathData="M 12 6.25 C 12.4142 6.25 12.75 6.58579 12.75 7 V 13 C 12.75 13.4142 12.4142 13.75 12 13.75 C 11.5858 13.75 11.25 13.4142 11.25 13 V 7 C 11.25 6.58579 11.5858 6.25 12 6.25 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M 12 17 C 12.5523 17 13 16.5523 13 16 C 13 15.4477 12.5523 15 12 15 C 11.4477 15 11 15.4477 11 16 C 11 16.5523 11.4477 17 12 17 Z"
+        android:fillColor="#FF000000" />
+</vector>

@@ -6,10 +6,11 @@ import java.util.UUID
 
 data class Doctor(
     val name: String,
-    val specialty: String,
     val colorAccent: Color,
     val initials: String,
     val apiUserId: String = "",
+    /** Seçili günde takvim sütunu kapalı (Ek MO.8 "Bu tarihte çalışmıyor"). */
+    val kapali: Boolean = false,
     val id: String = UUID.randomUUID().toString(),
 )
 
@@ -110,11 +111,9 @@ data class VoiceNote(
 
 object MockData {
     val doctors: List<Doctor> = listOf(
-        Doctor("Dt. Selin", "PROSTHO", DS.Colors.cyan400, "SD"),
-        Doctor("Dt. Ahmet", "ORTHO", DS.Colors.cyan400, "AK"),
-        Doctor("Dt. Mehmet", "SURGEON", DS.Colors.secondary, "MY"),
-        Doctor("Dt. Zeynep", "ENDO", DS.Colors.tertiaryContainer, "ZD"),
-        Doctor("Dt. Can", "PERIO", DS.Colors.orange400, "CA"),
+        Doctor("Dt. A", DS.Colors.cyan400, "A", apiUserId = "d1"),
+        Doctor("Dt. B", DS.Colors.secondary, "B", apiUserId = "d2"),
+        Doctor("Dt. C", DS.Colors.tertiaryContainer, "C", apiUserId = "d3", kapali = true),
     )
 
     val calendarDays: List<CalendarDay> = listOf(
@@ -222,4 +221,18 @@ object MockData {
         VoiceNote("Implant", "38", "DENTAL PROCEDURE", "mouth.fill", DS.Colors.cyan400),
         VoiceNote("Root Canal", "39", "SURGERY", "cross.case.fill", DS.Colors.secondary),
     )
+}
+
+/** Randevu türü kodunun ekrandaki adı — web `appointments.types` (Prisma `AppointmentType`); bilinmeyen kod olduğu gibi. */
+fun randevuTuruEtiketi(kod: String): String = when (kod) {
+    "CONSULTATION" -> "Konsültasyon"
+    "ORTHODONTICS" -> "Ortodonti"
+    "TREATMENT" -> "Tedavi"
+    "SURGERY" -> "Cerrahi"
+    "ROOT_CANAL" -> "Kanal"
+    "CONTROL" -> "Kontrol"
+    "TRYON" -> "Prova"
+    "IMPLANT" -> "İmplant"
+    "OTHER" -> "Diğer"
+    else -> kod
 }

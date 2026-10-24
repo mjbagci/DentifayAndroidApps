@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/BriefcaseMedical.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 2.001 8.5 L 2 13.997 c -.001 3.3 -.002 4.951 1.023 5.977 S 5.698 21 9 21 h 6 c 3.3 0 4.949 0 5.974 -1.025 S 22 17.3 22 14.001 l .001 -5.501 m -13.502 -2 c 0 -1.404 0 -2.107 .337 -2.611 a 2 2 0 0 1 .551 -.552 C 9.892 3 10.594 3 12 3 c 1.404 0 2.106 0 2.61 .337 a 2 2 0 0 1 .553 .552 c .337 .504 .337 1.207 .337 2.611"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 19.998 6.5 h -16 a 2 2 0 0 0 -2 2 a 4 4 0 0 0 4.001 4 h 11.999 a 4 4 0 0 0 4 -4 a 2 2 0 0 0 -2 -2 m -9.999 6 v 1 c 0 .465 0 .697 .05 .888 a 1.5 1.5 0 0 0 1.061 1.06 c .191 .052 .424 .052 .889 .052 s .697 0 .888 -.051 a 1.5 1.5 0 0 0 1.06 -1.06 c .052 -.191 .052 -.424 .052 -.889 v -1"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

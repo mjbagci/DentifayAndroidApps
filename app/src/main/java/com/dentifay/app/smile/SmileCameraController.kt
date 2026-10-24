@@ -1,5 +1,6 @@
 package com.dentifay.app.smile
 
+import androidx.compose.runtime.mutableDoubleStateOf
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -64,7 +65,7 @@ class SmileCameraController {
     var position by mutableStateOf(Position.back)
         private set
     /** Hazır durumun ne kadar sürdüğü (0–1) — otomatik çekim halkası. */
-    var readyProgress by mutableStateOf(0.0)
+    var readyProgress by mutableDoubleStateOf(0.0)
         private set
     var isCapturing by mutableStateOf(false)
         private set
@@ -120,6 +121,12 @@ class SmileCameraController {
     }
 
     fun stop() { engine.stop() }
+
+    /**
+     * Ekran dönüşü (`Surface.ROTATION_*`). Tablet/katlanabilir döndürülünce etkinlik yeniden kurulmaz; önizleme, analiz
+     * ve çekim bu değerle hizalanır — yatayda kare ve fotoğraf yatay gelir (telefon dikey kilitli: hep 0).
+     */
+    fun setTargetRotation(rotation: Int) { engine.setTargetRotation(rotation) }
 
     fun flipCamera() {
         position = if (position == Position.back) Position.front else Position.back
@@ -207,6 +214,8 @@ class CameraEngine(private val preview: Preview) {
     @Volatile private var guide = SmileCaptureGuide()           // yalnızca analiz iş parçacığında
     @Volatile private var frameCounter = 0
     @Volatile private var mirrored = false
+    /** Son bilinen ekran dönüşü; bağlanırken kullanım durumlarına uygulanır. */
+    @Volatile private var targetRotation: Int? = null
 
     /** Canlı karede hız öncelikli algılayıcı (konturlar + göz/burun işaretleri). */
     private val detector by lazy {
@@ -254,6 +263,11 @@ class CameraEngine(private val preview: Preview) {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
             mirrored = position == SmileCameraController.Position.front
+            targetRotation?.let { r ->
+                preview.targetRotation = r
+                capture.targetRotation = r
+                analyzer.targetRotation = r
+            }
             analyzer.setAnalyzer(analysisExecutor) { proxy -> analyze(proxy) }
             p.unbindAll()
             val cam = p.bindToLifecycle(owner, selector, preview, capture, analyzer)
@@ -266,6 +280,19 @@ class CameraEngine(private val preview: Preview) {
             analysisExecutor.execute { guide = SmileCaptureGuide(); frameCounter = 0 }
             true
         }.getOrDefault(false)
+    }
+
+    /** Ana iş parçacığında çağrılır (Compose ekran dinleyicisi). */
+    fun setTargetRotation(rotation: Int) {
+        if (targetRotation == rotation) return
+        targetRotation = rotation
+        runCatching {
+            preview.targetRotation = rotation
+            imageCapture?.targetRotation = rotation
+            analysis?.targetRotation = rotation
+        }
+        // Rehber yeni yöne göre baştan ölçsün (eski kare koordinatları karışmasın).
+        analysisExecutor.execute { guide = SmileCaptureGuide(); frameCounter = 0 }
     }
 
     fun setZoom(zoom: Float) {

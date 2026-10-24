@@ -1,5 +1,6 @@
 package com.dentifay.app.smile
 
+import androidx.compose.runtime.mutableIntStateOf
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -46,14 +47,14 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * DentifAI · Before / After (gülüş simülasyonu).
+ * Gülüş simülasyonu · Before / After.
  *
  * Akış: rehberli çekim / galeri → ağız dikdörtgeni ve diş maskesi otomatik
  * seçilir → hekim tek bir tasarım ve kalite kademesi seçer (Orta · Orta İyi ·
  * İyi · Çok İyi), isterse ince ayar yapar → yalnızca ağız dikdörtgeni yüklenir
  * (bir kez) → sonuç cihazda hizalanıp yalnızca diş bölgesi fotoğrafa
  * yerleştirilir. Model ağzı kaydırırsa maskeli modelle OTOMATİK bir kez daha
- * denenir (ücretsiz). Her üretim kliniğin AI kredisinden düşer (sunucu yolu).
+ * denenir (ücretsiz). Her üretim kliniğin kredisinden düşer (sunucu yolu).
  */
 class SmileSimulationViewModel(guest: Boolean = false) {
 
@@ -193,18 +194,29 @@ class SmileSimulationViewModel(guest: Boolean = false) {
         private set
     var activeJobID by mutableStateOf<UUID?>(null)
     /** İlerleme süresi göstergesi için. */
-    var tick by mutableStateOf(0)
+    var tick by mutableIntStateOf(0)
         private set
 
-    /** Seçili kademenin kredisi (sunucu tarifesi; bilinmiyorsa uygulamadaki değer). */
-    val estimatedCredits: Double get() = SmileCreditsStore.shared.price(model)
+    /** Seçili kademenin kredisi — YALNIZ sunucunun `tiers`ı (M-E3.1); bilinmiyorsa `null` (sayı uydurulmaz). */
+    val estimatedCredits: Double? get() = SmileCreditsStore.shared.price(model)
+    /** Krediyle çalışan yolda kademenin bedeli bilinmiyor mu? (O zaman üretim başlatılamaz — "—".) */
+    val bedelBilinmiyor: Boolean
+        get() = SmileSimulationViewModel.bedelBilinmiyor(misafir = isGuest, olculu = SmileCreditsStore.shared.isMetered, kredi = estimatedCredits)
+    /** Kademe seçilebilir mi (M-E3.1): krediyle çalışan yolda yalnız sunucunun listesindeki kademe. */
+    fun secilebilir(m: SmileAIModel): Boolean =
+        !SmileSimulationViewModel.bedelBilinmiyor(
+            misafir = isGuest, olculu = SmileCreditsStore.shared.isMetered, kredi = SmileCreditsStore.shared.price(m),
+        )
     val activeJob: Job? get() = jobs.firstOrNull { it.id == activeJobID } ?: jobs.lastOrNull()
     val isGenerating: Boolean get() = jobs.any { it.state.isRunning }
-    val canGenerate: Boolean get() = photo != null && patientConsent && !isGenerating && !trialExhausted
+    val canGenerate: Boolean get() = photo != null && patientConsent && !isGenerating && !trialExhausted && !bedelBilinmiyor
     /** Kalan kredi bu kademeye yetmiyor mu (bilinmiyorsa false — sunucu yine denetler)? */
-    val lacksCredits: Boolean get() = !isGuest && SmileCreditsStore.shared.canAfford(estimatedCredits) == false
-    /** Kişinin aylık kredi limiti (Kredi Yönetimi) bu kademeye yetmiyor mu? Kredi almak AÇMAZ. */
-    val overPersonalLimit: Boolean get() = !isGuest && SmileCreditsStore.shared.exceedsPersonalLimit(estimatedCredits)
+    val lacksCredits: Boolean
+        get() {
+            if (isGuest) return false
+            val kredi = estimatedCredits ?: return false
+            return SmileCreditsStore.shared.canAfford(kredi) == false
+        }
     /** Ücretsiz deneme hakkı bitti mi (bilinmiyorsa false — sunucu yine denetler)? */
     val trialExhausted: Boolean get() = isGuest && GuestTrialStore.shared.isExhausted(GuestTrialFeature.smile)
 
@@ -230,6 +242,8 @@ class SmileSimulationViewModel(guest: Boolean = false) {
     private var uploadTasks = mutableMapOf<String, Deferred<String>>()
     private var work: kotlinx.coroutines.Job? = null
     private var ticker: kotlinx.coroutines.Job? = null
+    /** Son maske önizlemesi işi — kaydırıcı hızlı oynarken eski sonuç yenisinin üstüne yazılmasın. */
+    private var maskPreviewJob: kotlinx.coroutines.Job? = null
     private val maxParallel = 3
     /** Karşılaştırma için tutulan en fazla sonuç (bellek). */
     private val maxHistory = 6
@@ -285,6 +299,12 @@ class SmileSimulationViewModel(guest: Boolean = false) {
             out
         }.getOrNull()
 
+        /** Krediyle çalışan yolda kademenin bedeli bilinmiyor mu (saf — test edilebilir)? */
+        fun bedelBilinmiyor(misafir: Boolean, olculu: Boolean, kredi: Double?): Boolean = !misafir && olculu && kredi == null
+
+        /** Maske önizlemesinin en uzun kenarı (px) — ekranda ölçeklenerek çizilir, tam boy gerekmez. */
+        private const val maskPreviewMaxEdge = 1600
+
         private fun isCreditError(error: Throwable): Boolean = error is KieImageEditClient.KieError.clinicCreditsExhausted
 
         private fun isTrialExhausted(error: Throwable): Boolean {
@@ -310,11 +330,22 @@ class SmileSimulationViewModel(guest: Boolean = false) {
     /** Düzenleyiciye verilecek başlangıç: mevcut etkin maske (gri bitmap) + çalışma kırpımı. */
     fun maskEditorInput(): MaskEditorInput? {
         val photo = photo ?: return null
+        return makeMaskEditorInput(photo, maskExpansion.toFloat(), customMask)
+    }
+
+    /** `maskEditorInput()` ana iş parçacığı dışında (kırpım + maske hesapları dokunuşta takılma yapmasın). */
+    suspend fun maskEditorInputAsync(): MaskEditorInput? {
+        val photo = photo ?: return null
+        val exp = maskExpansion.toFloat()
+        val custom = customMask
+        return withContext(Dispatchers.Default) { makeMaskEditorInput(photo, exp, custom) }
+    }
+
+    private fun makeMaskEditorInput(photo: SmilePhoto, exp: Float, custom: Bitmap?): MaskEditorInput? {
         val crop = SmileImageProcessor.crop(photo.working, photo.region) ?: return null
         val r = photo.region
-        val exp = maskExpansion.toFloat()
         val current = SmileImageProcessor.maskBitmap(
-            SmileImageProcessor.effectiveMask(r, exp, MaskScope.all, customMask), r,
+            SmileImageProcessor.effectiveMask(r, exp, MaskScope.all, custom), r,
         ) ?: return null
         val auto = SmileImageProcessor.maskBitmap(SmileImageProcessor.mouthMask(r, exp), r) ?: return null
         return MaskEditorInput(crop, current, auto)
@@ -411,6 +442,8 @@ class SmileSimulationViewModel(guest: Boolean = false) {
 
     private fun runJobs(ids: List<UUID>, photo: SmilePhoto) {
         val model = if (isGuest) SmileAIModel.default else this.model
+        // Ekranda gösterilen bedel — sunucu farklı bulursa 409 döner ve görev açılmaz (M-E3.2).
+        val beklenenKredi = if (isGuest) null else estimatedCredits
         val expansion = maskExpansion.toFloat()
         val override = maskOverride(photo, expansion)
         val scope = maskScope
@@ -440,7 +473,7 @@ class SmileSimulationViewModel(guest: Boolean = false) {
                     for (id in ids) {
                         launch {
                             gate.withPermit {
-                                runOne(id, url, maskURL, client, model, photo, expansion, override, scope)
+                                runOne(id, url, maskURL, client, model, beklenenKredi, photo, expansion, override, scope)
                             }
                         }
                     }
@@ -468,6 +501,7 @@ class SmileSimulationViewModel(guest: Boolean = false) {
         maskURL: String?,
         client: KieImageEditClient,
         model: SmileAIModel,
+        beklenenKredi: Double?,
         photo: SmilePhoto,
         expansion: Float,
         override: MaskImage?,
@@ -476,7 +510,8 @@ class SmileSimulationViewModel(guest: Boolean = false) {
         val job = jobs.firstOrNull { it.id == id } ?: return
         update(id) { it.state = Job.State.generating; it.startedAt = Instant.now() }
         try {
-            val first = render(job.design, model, url, maskURL, client, photo, expansion, override, scope, fixOf = null)
+            val first = render(job.design, model, url, maskURL, client, photo, expansion, override, scope, fixOf = null,
+                beklenenKredi = beklenenKredi)
             var result = first.first
             update(id) { it.state = Job.State.compositing }
             var note: String? = null
@@ -517,6 +552,8 @@ class SmileSimulationViewModel(guest: Boolean = false) {
             Haptics.success()
         } catch (e: CancellationException) {
         } catch (e: Exception) {
+            // 409: sunucunun güncel bedeli karta yazılır; görev açılmadı, yeniden dokunuş yeni bedelle gider (M-E3.2).
+            if (e is KieImageEditClient.KieError.priceChanged) SmileCreditsStore.shared.bedelGuncellendi(model, e.credits)
             val credits = isCreditError(e)
             val contact = isTrialExhausted(e)
             val msg = message(e)
@@ -537,12 +574,13 @@ class SmileSimulationViewModel(guest: Boolean = false) {
         override: MaskImage?,
         scope: MaskScope,
         fixOf: String?,
+        beklenenKredi: Double? = null,
     ): Pair<SmileComposite, String> {
         val prompt = SmilePrompt.build(design, maxLength = model.maxPromptLength,
             maskedContext = false, masked = model.usesMask,
             scope = scope, maskedOnly = false, frontal = photo.region.isFrontal)
         val generation = client.generate(model, url, maskURL, prompt,
-            seed = Random.nextInt(1, 1_000_000), fixOf = fixOf)
+            seed = Random.nextInt(1, 1_000_000), fixOf = fixOf, beklenenKredi = beklenenKredi)
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
         val data = generation.data
         val composite = withContext(Dispatchers.Default) {
@@ -657,20 +695,28 @@ class SmileSimulationViewModel(guest: Boolean = false) {
         val expansion = maskExpansion.toFloat()
         val scope = maskScope
         val custom = customMask
-        this.scope.launch {
+        maskPreviewJob?.cancel()
+        maskPreviewJob = this.scope.launch {
             val img = withContext(Dispatchers.Default) {
                 runCatching {
                     val mask = SmileImageProcessor.effectiveMask(photo.region, expansion, scope, custom)
                     val gray = SmileImageProcessor.maskPreview(photo, mask = mask) ?: return@runCatching null
-                    // Gri maske → alfa (Compose maskesi alfa kanalını kullanır): beyaz, alfa = gri
-                    val out = Bitmap.createBitmap(gray.width, gray.height, Bitmap.Config.ARGB_8888)
+                    // Gri maske → alfa (Compose maskesi alfa kanalını kullanır): beyaz, alfa = gri. Önizleme ekranda
+                    // ölçeklenerek çizildiği için tek geçişte küçültülür (bellek + GPU yüklemesi).
+                    val k = min(1f, maskPreviewMaxEdge.toFloat() / max(gray.width, gray.height).coerceAtLeast(1))
+                    val w = (gray.width * k).roundToInt().coerceAtLeast(1)
+                    val h = (gray.height * k).roundToInt().coerceAtLeast(1)
+                    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                     val cm = ColorMatrix(floatArrayOf(
                         0f, 0f, 0f, 0f, 255f,
                         0f, 0f, 0f, 0f, 255f,
                         0f, 0f, 0f, 0f, 255f,
                         1f, 0f, 0f, 0f, 0f,
                     ))
-                    Canvas(out).drawBitmap(gray, 0f, 0f, Paint().apply { colorFilter = ColorMatrixColorFilter(cm) })
+                    Canvas(out).drawBitmap(
+                        gray, null, android.graphics.Rect(0, 0, w, h),
+                        Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(cm) },
+                    )
                     gray.recycle()
                     out
                 }.getOrNull()
@@ -702,6 +748,7 @@ class SmileSimulationViewModel(guest: Boolean = false) {
     private fun cancelAll() {
         work?.cancel(); work = null
         ticker?.cancel(); ticker = null
+        maskPreviewJob?.cancel(); maskPreviewJob = null
     }
 
     private fun message(error: Throwable): String = when (error) {

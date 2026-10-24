@@ -5,9 +5,13 @@ import com.dentifay.app.credit.SmileCreditFormat
 import kotlinx.serialization.json.JsonObject
 
 /**
- * Sunucunun "kredi gerekli" yanıtı — HTTP **402**, gövde her uçta AYNI.
- * Sohbet (SSE), sesli mod ve seslendirme bu TEK modelden geçer; ekrana ham kod ya da JSON basılmaz.
- * ⚠ Gülüş simülasyonu uçları (`/api/ai/smile/…`) kendi gövdesini taşır (KieImageEditClient).
+ * Kredi yetmedi — TEK model (MOBIL_IS_EMRI M-E1.7.7). Kaynaklar:
+ *   · kredili uçların 402 gövdesi (`backend/lib/kredi-dusum.js`): `{ code|error: "INSUFFICIENT_CREDIT" | "CREDIT_LIMIT_REACHED",
+ *     message, requiredCredits, availableCredits, scope, limitCredits, usedCredits, isDemo, canPurchase }`;
+ *   · demo hesabın sabit tarifeli uçlarında 403 `DEMO_CREDITS_EXHAUSTED`;
+ *   · sohbetin SSE `error` olayı (`INSUFFICIENT_CREDIT` · `CREDIT_LIMIT_REACHED` · `DEMO_CREDITS_EXHAUSTED`, `yarida`).
+ * `E_CREDIT_FX_MISSING` kredi modeli DEĞİLDİR (genel hata). Ekrana ham kod ya da JSON basılmaz; gövde
+ * sunucunun `message`ı VARSA AYNEN (M0-6), yoksa web `credits.gate` cümleleri (Ek MO.23g).
  */
 class CreditRequired(
     val kind: Kind,
@@ -19,6 +23,10 @@ class CreditRequired(
     val usedCredits: Double? = null,
     val isDemo: Boolean = false,
     val canPurchase: Boolean = false,
+    /** Sunucunun Türkçe cümlesi (varsa AYNEN gösterilir). */
+    val serverMessage: String? = null,
+    /** Tur ortasında kredi bitti (sohbet ve Tedavi Planı): o tura ait yarım çıktı ÇİZİLMEZ. */
+    val yarida: Boolean = false,
 ) : Exception() {
 
     enum class Kind(val raw: String) {
@@ -26,83 +34,81 @@ class CreditRequired(
         limitReached("CREDIT_LIMIT_REACHED"),
     }
 
-    override fun equals(other: Any?): Boolean = other is CreditRequired && other.kind == kind &&
-        other.requiredCredits == requiredCredits && other.availableCredits == availableCredits && other.scope == scope &&
-        other.limitCredits == limitCredits && other.usedCredits == usedCredits && other.isDemo == isDemo && other.canPurchase == canPurchase
+    private fun alanlar() = listOf(kind, requiredCredits, availableCredits, scope, limitCredits, usedCredits, isDemo, canPurchase, serverMessage, yarida)
+    override fun equals(other: Any?): Boolean = other is CreditRequired && other.alanlar() == alanlar()
+    override fun hashCode(): Int = alanlar().hashCode()
 
-    override fun hashCode(): Int = listOf(kind, requiredCredits, availableCredits, scope, limitCredits, usedCredits, isDemo, canPurchase).hashCode()
-
-    // MARK: - Metin
-
-    /** Kredi ekranına yönlendirme önerilsin mi? Mağaza derlemesinde hiç önerilmez (`AppConfig.inAppPurchase`). */
-    val offersPurchase: Boolean get() = AppConfig.inAppPurchase && kind == Kind.insufficient && canPurchase && !isDemo
+    // MARK: - Metin (web `credits.gate.*` — Ek MO.23g/h)
 
     val title: String
-        get() = when (kind) {
-            Kind.limitReached -> "Aylık kredi limitiniz doldu"
-            Kind.insufficient -> if (isDemo) "Demo krediniz bitti" else "Kredi yetersiz"
+        get() = when {
+            isDemo -> "Demo krediniz bitti"
+            kind == Kind.limitReached -> "Aylık kredi limitiniz doldu"
+            else -> "Kredi yetersiz"
         }
 
-    /** Sayılar + ne yapılabileceği (başlık hariç). */
+    /** Gövde: yarıda kalan istekte Ek MO.23h; değilse sunucunun cümlesi AYNEN; o da yoksa sayılı cümleler + ipucu. */
     val detail: String
-        get() = when (kind) {
-            Kind.limitReached -> {
-                val parts = mutableListOf<String>()
-                if (usedCredits != null && limitCredits != null) {
-                    val kapsam = scopeLabel?.let { "$it için " } ?: ""
-                    parts += "Bu ay $kapsam${credits(usedCredits)} / ${credits(limitCredits)} kredi kullanıldı."
+        get() {
+            if (yarida) return YARIDA_METNI
+            serverMessage?.let { return it }
+            if (isDemo) return "Demo krediniz bitti."
+            return when (kind) {
+                Kind.limitReached -> {
+                    val parts = mutableListOf<String>()
+                    if (usedCredits != null && limitCredits != null) {
+                        val f = scopeLabel
+                        parts += if (f != null) "$f için bu ayki ${credits(limitCredits)} kredilik limitinizin ${credits(usedCredits)} kredisini kullandınız."
+                        else "Bu ay ${credits(limitCredits)} kredilik limitinizin ${credits(usedCredits)} kredisini kullandınız."
+                    }
+                    parts += "Limitinizi kredi yükleme yetkisi olan kişi Kredi Yönetimi'nden değiştirebilir."
+                    parts.joinToString(" ")
                 }
-                if (requiredCredits != null && requiredCredits > 0) parts += "Bu işlem ${credits(requiredCredits)} kredi."
-                parts += "Limiti değiştirmek için klinik sahibine başvurun."
-                parts.joinToString(" ")
-            }
-            Kind.insufficient -> {
-                val parts = mutableListOf<String>()
-                if (requiredCredits != null && requiredCredits > 0) {
-                    val have = availableCredits?.let { ", kalan krediniz ${credits(it)}" } ?: ""
-                    parts += "Bu işlem ${credits(requiredCredits)} kredi$have."
-                } else if (availableCredits != null) {
-                    parts += "Kalan krediniz ${credits(availableCredits)}."
+                Kind.insufficient -> {
+                    val parts = mutableListOf<String>()
+                    parts += if (requiredCredits != null && requiredCredits > 0 && availableCredits != null) {
+                        "Bu işlem ${credits(requiredCredits)} kredi gerektiriyor; kullanılabilir krediniz ${credits(availableCredits)}."
+                    } else "Bu işlem için yeterli krediniz yok."
+                    if (!canPurchase) parts += "Kredi yüklemek için klinik sahibine başvurun."
+                    parts.joinToString(" ")
                 }
-                parts += when {
-                    isDemo -> "Devam etmek için Dentifay satış ekibiyle görüşebilirsiniz."
-                    canPurchase -> "Kredi yükleyerek devam edebilirsiniz."
-                    AppConfig.inAppPurchase -> "Kredi yüklemek için klinik sahibine başvurun."
-                    else -> "Klinik yöneticinize haber verin."
-                }
-                parts.joinToString(" ")
             }
         }
 
-    /** Tek cümlelik tam metin. */
-    override val message: String get() = "$title. $detail"
+    /** Sunucu cümlesi başlıkla başlıyor mu ("Kredi yetersiz. Kredi Yönetimi'nden…")? */
+    private val basliklaBaslar: Boolean get() = detail.startsWith(title, ignoreCase = true)
 
-    /** Sesli modda okunacak kısa metin (sayısız). */
-    val spokenText: String
-        get() = when (kind) {
-            Kind.limitReached -> "Aylık kredi limitiniz doldu. Limiti değiştirmek için klinik sahibine başvurun."
-            Kind.insufficient -> when {
-                isDemo -> "Demo krediniz bitti."
-                canPurchase -> "Krediniz yetersiz. Kredi yükleyerek devam edebilirsiniz."
-                AppConfig.inAppPurchase -> "Krediniz yetersiz. Kredi yüklemek için klinik sahibine başvurun."
-                else -> "Krediniz yetersiz. Klinik yöneticinize haber verin."
-            }
-        }
+    /** Tek cümlelik tam metin (sohbet balonu, kredi ekranı gerekçesi); başlık sunucu cümlesinde varsa iki kez yazılmaz. */
+    override val message: String get() = if (basliklaBaslar) detail else "$title. $detail"
 
+    /** Kart gövdesi: başlık kartın üstünde zaten yazılı — cümle başlıkla başlıyorsa o kısım atılır. */
+    val kartMetni: String
+        get() = if (basliklaBaslar) detail.substring(title.length).trimStart('.', ' ', ':', '—', '-').ifEmpty { detail } else detail
+
+    /** Özellik limiti ise özelliğin adı; aylık toplam limitte null. */
     private val scopeLabel: String?
         get() = scope?.takeIf { it != "total" && it != "*" }?.let { CreditLabels.feature(it) }
 
     companion object {
+        /** Ek MO.23h (web `credits.gate.partial`). */
+        const val YARIDA_METNI = "Krediniz bu isteği tamamlamaya yetmedi; istek yarıda kaldı. Kullanılan kısım kredinizden düşüldü. Kredi Yönetimi'nden kredi yükleyebilirsiniz."
+
         private fun credits(v: Double): String = SmileCreditFormat.credits(v)
 
-        /** HTTP yanıtından: yalnız 402'de değer döner; gövde okunamasa bile "kredi yetersiz". */
+        /** HTTP yanıtından: 402 → kredi modeli (gövde okunamasa bile); 403 + `DEMO_CREDITS_EXHAUSTED` → demo; kodsuz 403 null. */
         fun parse(status: Int, data: ByteArray): CreditRequired? {
-            if (status != 402) return null
             val json = runCatching { DfyJson.parseToJsonElement(data.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull()
-            return parse(json ?: JsonObject(emptyMap())) ?: CreditRequired(Kind.insufficient)
+            return when (status) {
+                402 -> parse(json ?: JsonObject(emptyMap())) ?: CreditRequired(Kind.insufficient)
+                403 -> {
+                    val code = json?.str("code") ?: json?.str("error")
+                    if (code == "DEMO_CREDITS_EXHAUSTED") parse(json!!) else null
+                }
+                else -> null
+            }
         }
 
-        /** Ayrıştırılmış gövde (ya da SSE `error` olayı) — kod tanınmazsa null. */
+        /** Ayrıştırılmış gövde ya da SSE `error` olayı — kod tanınmazsa null. */
         fun parse(json: JsonObject): CreditRequired? {
             val code = json.str("code") ?: json.str("error")
             var demo = json.bool("isDemo") ?: false
@@ -112,6 +118,7 @@ class CreditRequired(
                 "DEMO_CREDITS_EXHAUSTED" -> { demo = true; Kind.insufficient }
                 else -> return null
             }
+            val mesaj = json.str("message")?.trim()
             return CreditRequired(
                 kind = kind,
                 requiredCredits = json.num("requiredCredits"),
@@ -120,9 +127,27 @@ class CreditRequired(
                 limitCredits = json.num("limitCredits"),
                 usedCredits = json.num("usedCredits"),
                 isDemo = demo,
-                // Limit dolduğunda kredi almak limiti AÇMAZ; demoda ve mağaza derlemesinde satın alma yok.
-                canPurchase = AppConfig.inAppPurchase && kind == Kind.insufficient && !demo && (json.bool("canPurchase") ?: false),
+                canPurchase = kind == Kind.insufficient && !demo && (json.bool("canPurchase") ?: false),
+                serverMessage = mesaj?.takeIf { it.isNotEmpty() },
+                yarida = json.bool("yarida") ?: false,
             )
         }
     }
 }
+
+/** Ek MO.23f — `E_CREDIT_FX_MISSING` sunucu cümlesi yoksa. */
+const val KREDI_KUR_YOK_METNI = "Kredi şu an hesaplanamıyor; biraz sonra tekrar deneyin."
+
+/** Sunucu hata gövdesinin makine kodu (`code`; yoksa kod biçimli `error`) — ekrana BASILMAZ (M0-7). */
+fun serverCode(data: ByteArray): String? {
+    val json = runCatching { DfyJson.parseToJsonElement(data.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull() ?: return null
+    json.str("code")?.takeIf { it.isNotEmpty() }?.let { return it }
+    json.str("error")?.takeIf { it.isNotEmpty() && !it.contains(" ") }?.let { return it }
+    return null
+}
+
+/**
+ * Hata gövdesinin ekrandaki cümlesi, durumu bilerek: 403'te kodsuz yetenek reddi Ek MO3.7, iş kodlu 403 sunucunun cümlesi
+ * (M-E3.6 · `Yetki.yasakMetni`); öteki durumlarda `serverSentence`.
+ */
+fun hataCumlesi(status: Int, data: ByteArray): String? = if (status == 403) Yetki.yasakMetni(data) else serverSentence(data)

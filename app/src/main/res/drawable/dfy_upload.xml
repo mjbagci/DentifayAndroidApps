@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Upload.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 5.25 21 h 13.5 c .232 0 .348 0 .446 -.01 a 2 2 0 0 0 1.794 -1.794 c .01 -.098 .01 -.214 .01 -.446 s 0 -.348 -.01 -.446 a 2 2 0 0 0 -1.794 -1.794 c -.098 -.01 -.214 -.01 -.446 -.01 h -1.69 c -.228 0 -.342 0 -.451 .012 a 2 2 0 0 0 -1.03 .427 c -.087 .069 -.168 .15 -.329 .311 a 4 4 0 0 1 -.328 .311 a 2 2 0 0 1 -1.03 .427 c -.11 .012 -.224 .012 -.453 .012 h -2.878 c -.229 0 -.343 0 -.452 -.012 a 2 2 0 0 1 -1.03 -.427 c -.087 -.069 -.168 -.15 -.329 -.311 s -.242 -.242 -.328 -.311 a 2 2 0 0 0 -1.03 -.427 c -.11 -.012 -.224 -.012 -.453 -.012 H 5.25 c -.232 0 -.348 0 -.446 .01 a 2 2 0 0 0 -1.794 1.794 c -.01 .098 -.01 .214 -.01 .446 s 0 .348 .01 .446 a 2 2 0 0 0 1.794 1.794 c .098 .01 .214 .01 .446 .01 M 16.5 7.5 S 13.186 3 12 3 S 7.5 7.5 7.5 7.5 M 12 4 v 11"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

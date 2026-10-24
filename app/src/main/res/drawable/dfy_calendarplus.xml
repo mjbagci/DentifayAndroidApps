@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/CalendarPlus.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 16 18.995 h 6 M 18.995 22 v -6 M 16 2 v 4 M 8 2 v 4 m -5 4 h 18 m 0 3 c 0 -3.771 0 -6.657 -1.172 -7.828 S 16.771 4 13 4 h -2 C 7.229 4 5.343 4 4.172 5.172 S 3 8.229 3 12 v 2 c 0 3.771 0 5.657 1.172 6.828 S 7.229 22 11 22 h 3"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/Maximize2.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 16.5 3.266 c .844 -.012 3.64 -.593 4.234 0 s .012 3.39 0 4.234 m -.228 -4.009 l -7.004 7.005 M 3.266 16.5 c -.012 .845 -.593 3.641 0 4.234 s 3.39 .012 4.234 0 m 3.002 -7.236 l -7.004 7.005"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

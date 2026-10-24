@@ -1,5 +1,6 @@
 package com.dentifay.app.login
 
+import androidx.compose.runtime.mutableFloatStateOf
 import android.provider.Settings
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -8,11 +9,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +27,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
@@ -53,6 +56,8 @@ import com.dentifay.app.theme.Motion
 import com.dentifay.app.theme.mutedHex
 import com.dentifay.app.theme.relativeLinearGradient
 import com.dentifay.app.theme.sys
+import com.dentifay.app.ui.LocalPencere
+import com.dentifay.app.ui.PencereBilgisi
 import com.dentifay.app.ui.PreviewEnv
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -71,6 +76,9 @@ private const val ANIM_SPAN_MS = 820 + 120 + 1820
  *   3) Alttaki yükleme çubuğu DİNAMİKTİR: min animasyon süresince ~0.9'a süzülür,
  *      1.0'a ancak veri (contentReady) geldiğinde dolar; veri gecikirse 0.9'da bekler.
  *      Her ikisi de hazır olunca RootView eriyerek (blur+scale+fade) kapatır.
+ *
+ * Kısa pencerede (bölünmüş ekran, yatay küçük tablet) sahne orantılı küçülür — logo ve çubuk kesilmez. Akan değerler
+ * (parça kayması, sheen, çubuk) yalnız çizim aşamasında okunur: animasyon boyunca yeniden oluşturma yok.
  */
 @Composable
 fun SplashView(contentReady: Boolean, onFinished: () -> Unit) {
@@ -84,7 +92,7 @@ fun SplashView(contentReady: Boolean, onFinished: () -> Unit) {
 
     val offset = remember { Animatable(190f) }        // parça ayrıklığı → 0 birleşti
     val pieceOpacity = remember { Animatable(0f) }
-    var logoOpacity by remember { mutableStateOf(0f) }
+    var logoOpacity by remember { mutableFloatStateOf(0f) }
     val sheen = remember { Animatable(-1.2f) }        // çapraz sheen konumu (-1.2 … 1.2) — logo+yazı ORTAK
     var showTitle by remember { mutableStateOf(false) }
     val barProgress = remember { Animatable(0f) }
@@ -150,9 +158,14 @@ fun SplashView(contentReady: Boolean, onFinished: () -> Unit) {
         }
     }
 
+    // ~410 dp yüksek sahne: 480 dp'den kısa pencerede orantılı küçülür (yerleşim değil, yalnız çizim ölçeği).
+    val olcek = (LocalPencere.current.yukseklik.value / 480f).coerceIn(0.6f, 1f)
     Box(Modifier.fillMaxSize().background(DS.Colors.background), contentAlignment = Alignment.Center) {
         Column(
-            Modifier.offset(y = (-6).dp),
+            Modifier
+                .wrapContentHeight(unbounded = true)
+                .graphicsLayer { scaleX = olcek; scaleY = olcek }
+                .offset(y = (-6).dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(30.dp),
         ) {
@@ -172,20 +185,23 @@ fun SplashView(contentReady: Boolean, onFinished: () -> Unit) {
             ) {
                 MetalNeonTitle("Dentifay", shinePhase = { sheen.value }, modifier = Modifier.graphicsLayer { alpha = titleAlpha })
 
+                // Dolgu çizimde okunur (her karede yeniden oluşturma/ölçüm yok).
                 Box(
                     Modifier
                         .size(width = 210.dp, height = 6.dp)
                         .clip(RoundedCornerShape(50))
                         .background(Color.White.copy(alpha = 0.09f))
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxHeight()
-                            .width((210f * max(0f, barProgress.value)).dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(DS.Gradients.primaryGradient)
-                    )
-                }
+                        .drawBehind {
+                            val dolu = size.width * max(0f, barProgress.value)
+                            if (dolu > 0f) {
+                                drawRoundRect(
+                                    DS.Gradients.primaryGradient,
+                                    size = Size(dolu, size.height),
+                                    cornerRadius = CornerRadius(size.height / 2, size.height / 2),
+                                )
+                            }
+                        }
+                )
             }
         }
     }
@@ -309,6 +325,22 @@ private fun MetalNeonTitle(text: String, shinePhase: () -> Float, modifier: Modi
 @Composable
 private fun SplashViewPreview() {
     PreviewEnv(loggedIn = false) {
+        SplashView(contentReady = true, onFinished = {})
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 1280, heightDp = 800)
+@Composable
+private fun SplashViewTabletPreview() {
+    PreviewEnv(loggedIn = false, pencere = PencereBilgisi.TABLET_YATAY) {
+        SplashView(contentReady = true, onFinished = {})
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0F131E, widthDp = 900, heightDp = 380)
+@Composable
+private fun SplashViewKisaPreview() {
+    PreviewEnv(loggedIn = false, pencere = PencereBilgisi(900.dp, 380.dp)) {
         SplashView(contentReady = true, onFinished = {})
     }
 }

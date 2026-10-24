@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ÜRETİLEN DOSYA — tools/svg2vector.py (kaynak: tools/ikon-kaynak/dfy/ScanLine.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+    <path
+        android:pathData="M 5.992 12 h 12"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M 14.992 21.5 c 1.863 0 2.794 0 3.54 -.271 a 4.5 4.5 0 0 0 2.689 -2.69 c .271 -.745 .271 -1.677 .271 -3.539 m -12.5 6.5 c -1.862 0 -2.793 0 -3.539 -.271 a 4.5 4.5 0 0 1 -2.69 -2.69 c -.27 -.745 -.27 -1.677 -.27 -3.539 m 6.5 -12.5 c -1.863 0 -2.794 0 -3.54 .271 a 4.5 4.5 0 0 0 -2.69 2.69 c -.27 .746 -.27 1.677 -.27 3.539 m 12.5 -6.5 c 1.862 0 2.793 0 3.538 .271 a 4.5 4.5 0 0 1 2.69 2.69 c .271 .746 .271 1.677 .271 3.539"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

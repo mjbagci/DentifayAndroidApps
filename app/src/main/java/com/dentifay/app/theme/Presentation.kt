@@ -92,7 +92,11 @@ fun DfySheet(
         dragHandle = if (showDragHandle) ({ androidx.compose.material3.BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.25f)) }) else null,
     ) {
         val mod = if (heightFraction != null) Modifier.fillMaxHeight(heightFraction) else Modifier
-        androidx.compose.foundation.layout.Column(mod) { content(dismiss) }
+        // Sayfa ayrı bir pencerededir: içinden açılan tam ekran akışlar (FullScreenCover) kökteki katmanda çizilse sayfanın
+        // ALTINDA kalırdı. Her sayfa kendi kapak katmanını taşır; kapak sayfanın alanını kaplar.
+        CoverHost {
+            androidx.compose.foundation.layout.Column(mod) { content(dismiss) }
+        }
     }
 }
 
@@ -111,7 +115,8 @@ val LocalCoverHost = staticCompositionLocalOf<SnapshotStateList<CoverEntry>?> { 
 fun CoverHost(content: @Composable () -> Unit) {
     val entries = remember { mutableStateListOf<CoverEntry>() }
     CompositionLocalProvider(LocalCoverHost provides entries) {
-        Box(Modifier.fillMaxSize()) {
+        // Boyutu içerik belirler (kökte içerik zaten tam ekrandır; bir sayfanın içinde sayfayı büyütmez).
+        Box {
             content()
             entries.forEach { entry ->
                 key(entry) {

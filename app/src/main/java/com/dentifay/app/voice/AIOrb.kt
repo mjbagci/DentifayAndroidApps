@@ -16,7 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,9 @@ import com.dentifay.app.ui.PreviewEnv
  * Sesli akışların ortak göstergesi. Eskiden parçacıklı, parlayan bir küreydi; web
  * arayüzünün sakin diline uyması için düz bir cam disk + ses seviyesine göre genişleyen
  * ince marka halkası oldu. İmza aynı kaldı (`AIOrb(size, isAnimating, audioLevel)`).
+ *
+ * Başarım: seviye ve nefes animasyonu YALNIZ çizim katmanında (`graphicsLayer`) okunur — saniyede
+ * onlarca seviye güncellemesi bileşimi yeniden kurmaz.
  */
 @Composable
 fun AIOrb(
@@ -58,24 +62,28 @@ fun AIOrb(
     val breatheEnabled = remember { isAnimating && !reduceMotion }
 
     val level = audioLevel.coerceIn(0f, 1f)
-    val animatedLevel by animateFloatAsState(level, Motion.easeOut<Float>(120), label = "orbLevel")
+    val animatedLevel: State<Float> = animateFloatAsState(level, Motion.easeOut<Float>(120), label = "orbLevel")
 
-    val breathe = if (breatheEnabled) {
-        val t = rememberInfiniteTransition(label = "orbBreathe")
-        val v by t.animateFloat(0f, 1f, infiniteRepeatable(Motion.easeInOut<Float>(2400), RepeatMode.Reverse), label = "breathe")
-        v
-    } else 0f
-    val diskScale = if (isAnimating && !reduceMotion) 1f + 0.015f * breathe else 1f
+    val breathe: State<Float> = if (breatheEnabled) {
+        rememberInfiniteTransition(label = "orbBreathe")
+            .animateFloat(0f, 1f, infiniteRepeatable(Motion.easeInOut<Float>(2400), RepeatMode.Reverse), label = "breathe")
+    } else {
+        remember { mutableFloatStateOf(0f) }
+    }
+    val diskAnimates = isAnimating && !reduceMotion
 
+    // Görsel yalnız süstür (Swift `accessibilityHidden`): katmanların erişilebilirlik düğümü yoktur; dokunma
+    // eylemi ve etiketi çağıranın `modifier`ındadır.
     Box(modifier.size(size), contentAlignment = Alignment.Center) {
         // Ses seviyesi halkası — yalnız konuşurken belirginleşir.
         Box(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    val s = 1f + animatedLevel * 0.22f
+                    val l = animatedLevel.value
+                    val s = 1f + l * 0.22f
                     scaleX = s; scaleY = s
-                    alpha = 0.25f + animatedLevel * 0.6f
+                    alpha = 0.25f + l * 0.6f
                 }
                 .border(1.5.dp, DS.Gradients.primaryDiagonal, CircleShape)
         )
@@ -84,7 +92,10 @@ fun AIOrb(
             Modifier
                 .fillMaxSize()
                 .padding(size * 0.08f)
-                .graphicsLayer { scaleX = diskScale; scaleY = diskScale }
+                .graphicsLayer {
+                    val s = if (diskAnimates) 1f + 0.015f * breathe.value else 1f
+                    scaleX = s; scaleY = s
+                }
                 .background(Color.White.copy(alpha = 0.035f), CircleShape)
                 .background(DS.Gradients.primaryDiagonal, CircleShape, alpha = 0.14f)
                 .border(1.dp, DS.Colors.hairlineStrong, CircleShape)
@@ -117,6 +128,7 @@ private fun AIOrbPreview() {
         ) {
             AIOrb(size = 210.dp, audioLevel = 0f)
             AIOrb(size = 160.dp, audioLevel = 0.6f)
+            AIOrb(size = 140.dp, isAnimating = false, audioLevel = 0f)
         }
     }
 }

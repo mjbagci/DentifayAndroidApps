@@ -84,6 +84,21 @@ enum class TabItem {
             if (Yetki.analizKartlari.any { Yetki.gorur(caps, it) }) s += ai
             return s
         }
+
+        /**
+         * Alt çubuk düzeni: "Ekle" her zaman TAM ORTADA, iki yanda eşit sayıda yuva. Dört sekmesi olmayan rollerde (ör. hekim
+         * stoğu görmez) boşluk Ayarlar ile dolar — çubuk hep beş öğe olur. Kısa kalan yan dış kenardan boş yuvayla dengelenir.
+         * Dönen listede `null` boş yuvadır; `quickAdd` ortadaki düğmedir.
+         */
+        fun altCubuk(gorunur: Set<TabItem>): List<TabItem?> {
+            val yan = SIRA.filter { it in gorunur && it != quickAdd }.toMutableList()
+            if (yan.size < 4 && settings in gorunur) yan += settings
+            if (quickAdd !in gorunur) return yan
+            val sol = yan.take((yan.size + 1) / 2)
+            val sag = yan.drop(sol.size)
+            val n = maxOf(sol.size, sag.size)
+            return List(n - sol.size) { null } + sol + quickAdd + sag + List(n - sag.size) { null }
+        }
     }
 }
 
@@ -99,7 +114,7 @@ fun BottomNavBar(
     gorunur: Set<TabItem> = TabItem.entries.toSet(),
     onQuickAddTap: () -> Unit = {},
 ) {
-    val sira = TabItem.SIRA.filter { it in gorunur }
+    val sira = remember(gorunur) { TabItem.altCubuk(gorunur) }
     Column(modifier.fillMaxWidth().background(hex("0c1019"))) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(DS.Colors.hairline))
         BoxWithConstraints(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 8.dp, bottom = 2.dp)) {
@@ -109,7 +124,8 @@ fun BottomNavBar(
             val x by animateDpAsState(slot * index.coerceAtLeast(0) + (slot - 22.dp) / 2, Motion.easeOut(200), label = "tabLine")
             Row(Modifier.fillMaxWidth()) {
                 sira.forEach { tab ->
-                    if (tab == TabItem.quickAdd) QuickAddButton(Modifier.weight(1f), onQuickAddTap)
+                    if (tab == null) Spacer(Modifier.weight(1f))
+                    else if (tab == TabItem.quickAdd) QuickAddButton(Modifier.weight(1f), onQuickAddTap)
                     else TabButton(tab, selectedTab == tab, Modifier.weight(1f)) {
                         if (selectedTab != tab) Haptics.selection()
                         onSelect(tab)
@@ -143,7 +159,8 @@ private fun TabButton(tab: TabItem, isActive: Boolean, modifier: Modifier, onCli
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
     ) {
-        Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) { DfyIcon(tab.icon, size = 19.dp, tint = iconColor) }
+        // Ortadaki "Ekle" kutusuyla aynı yükseklik: etiketler tek çizgide durur, ikonlar artı işaretiyle aynı hizada.
+        Box(Modifier.height(32.dp), contentAlignment = Alignment.Center) { DfyIcon(tab.icon, size = 19.dp, tint = iconColor) }
         Text(
             tab.label,
             style = sys(10.5, if (isActive) FontWeight.SemiBold else FontWeight.Medium),

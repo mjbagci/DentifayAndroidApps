@@ -158,7 +158,7 @@ Play Console → **Uygulama oluştur**:
 |---|---|---|
 | Uygulama simgesi 512×512 | `simge-512.png` | ✅ hazır |
 | Öne çıkan grafik 1024×500 | `kapak-1024x500.png` | ✅ hazır |
-| Telefon ekran görüntüleri (5 adet, 1080×2160, alfa kanalsız PNG) | `ekran-goruntuleri/telefon-1-giris.png` … `telefon-5-tedavi-plani.png` | ✅ hazır (örnek klinik verisi; hasta telefonları yer tutucu) |
+| Telefon ekran görüntüleri (6 adet, 1080×2160, alfa kanalsız PNG) | `ekran-goruntuleri/telefon-1-giris.png` … `telefon-6-analiz-merkezi.png` | ✅ hazır (örnek klinik verisi; hasta telefonları yer tutucu) |
 | 7 inç ve 10 inç tablet ekran görüntüleri (tablet listesinde görünmek için önerilir) | — | ⏳ çekilecek (tablet düzeni test edildi; emülatör düşük bellekte çöktüğü için görüntü alınamadı) |
 
 **Kategori ve iletişim** (Mağaza ayarları):

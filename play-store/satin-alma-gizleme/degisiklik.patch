@@ -1,0 +1,357 @@
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -42,9 +42,13 @@
+             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+             signingConfigs.findByName("release")?.let { signingConfig = it }
+             buildConfigField("boolean", "ALLOW_HOST_OVERRIDE", "false")
++            // Play Ödemeler politikası: dijital ürün yalnız Play Faturalandırma ile satılır → mağaza
++            // derlemesinde kredi satın alma yok; krediler web panelinden alınır (qa bunu miras alır).
++            buildConfigField("boolean", "IN_APP_PURCHASE", "false")
+         }
+         debug {
+             buildConfigField("boolean", "ALLOW_HOST_OVERRIDE", "true")
++            buildConfigField("boolean", "IN_APP_PURCHASE", "true")
+         }
+         // Yayınla aynı (R8 + imza) ama test sunucusuna yönlendirilebilir — mağazaya yüklenmez.
+         create("qa") {
+--- a/app/src/main/java/com/dentifay/app/core/AppConfig.kt
++++ b/app/src/main/java/com/dentifay/app/core/AppConfig.kt
+@@ -69,6 +69,13 @@
+         get() = apiBaseURL.let { if (it.endsWith(API_SUFFIX)) it.dropLast(API_SUFFIX.length) else it }
+ 
+     /**
++     * Uygulama içi kredi satın alma. Mağaza derlemesinde (release, qa) KAPALI: krediler web panelinden
++     * alınır, uygulama yalnız harcar ve bakiyeyi gösterir. Kapalıyken paketler, satın alma penceresi ve
++     * "Kredi Al / kredi yükle" çağrıları çizilmez; web'e satın alma bağlantısı da verilmez (Play Ödemeler §4).
++     */
++    val inAppPurchase: Boolean get() = BuildConfig.IN_APP_PURCHASE
++
++    /**
+      * Yalnız geliştirme: `adb shell am start -n com.dentifay.app/.MainActivity --es DENTIFAY_API_HOST http://10.0.2.2:3001`
+      * verilirse tüm istekler o sunucuya gider; değer saklanır. `prod` saklanan değeri siler.
+      */
+--- a/app/src/main/java/com/dentifay/app/core/CreditRequired.kt
++++ b/app/src/main/java/com/dentifay/app/core/CreditRequired.kt
+@@ -34,8 +34,8 @@
+ 
+     // MARK: - Metin
+ 
+-    /** Kredi ekranına yönlendirme önerilsin mi? */
+-    val offersPurchase: Boolean get() = kind == Kind.insufficient && canPurchase && !isDemo
++    /** Kredi ekranına yönlendirme önerilsin mi? Mağaza derlemesinde hiç önerilmez (`AppConfig.inAppPurchase`). */
++    val offersPurchase: Boolean get() = AppConfig.inAppPurchase && kind == Kind.insufficient && canPurchase && !isDemo
+ 
+     val title: String
+         get() = when (kind) {
+@@ -67,7 +67,8 @@
+                 parts += when {
+                     isDemo -> "Devam etmek için Dentifay satış ekibiyle görüşebilirsiniz."
+                     canPurchase -> "Kredi yükleyerek devam edebilirsiniz."
+-                    else -> "Kredi yüklemek için klinik sahibine başvurun."
++                    AppConfig.inAppPurchase -> "Kredi yüklemek için klinik sahibine başvurun."
++                    else -> "Klinik yöneticinize haber verin."
+                 }
+                 parts.joinToString(" ")
+             }
+@@ -83,7 +84,8 @@
+             Kind.insufficient -> when {
+                 isDemo -> "Demo krediniz bitti."
+                 canPurchase -> "Krediniz yetersiz. Kredi yükleyerek devam edebilirsiniz."
+-                else -> "Krediniz yetersiz. Kredi yüklemek için klinik sahibine başvurun."
++                AppConfig.inAppPurchase -> "Krediniz yetersiz. Kredi yüklemek için klinik sahibine başvurun."
++                else -> "Krediniz yetersiz. Klinik yöneticinize haber verin."
+             }
+         }
+ 
+@@ -118,8 +120,8 @@
+                 limitCredits = json.num("limitCredits"),
+                 usedCredits = json.num("usedCredits"),
+                 isDemo = demo,
+-                // Limit dolduğunda kredi almak limiti AÇMAZ; demoda satın alma yok.
+-                canPurchase = kind == Kind.insufficient && !demo && (json.bool("canPurchase") ?: false),
++                // Limit dolduğunda kredi almak limiti AÇMAZ; demoda ve mağaza derlemesinde satın alma yok.
++                canPurchase = AppConfig.inAppPurchase && kind == Kind.insufficient && !demo && (json.bool("canPurchase") ?: false),
+             )
+         }
+     }
+--- a/app/src/main/java/com/dentifay/app/credit/CreditCenterSheets.kt
++++ b/app/src/main/java/com/dentifay/app/credit/CreditCenterSheets.kt
+@@ -37,6 +37,7 @@
+ import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.tooling.preview.Preview
+ import androidx.compose.ui.unit.dp
++import com.dentifay.app.core.AppConfig
+ import com.dentifay.app.core.Unvan
+ import com.dentifay.app.theme.DS
+ import com.dentifay.app.theme.Haptics
+@@ -223,7 +224,9 @@
+                 }
+                 FormRow {
+                     Text(
+-                        "Aylık toplam limit ve özellik başına limit birlikte uygulanır; hangisi önce dolarsa işlem yapılmaz. Boş alan sınırsız, 0 kapalı demektir. Kredi satın almak kişi limitini aşmaz. Sahip ve yönetici hesaplarının limitine yalnız klinik sahibi dokunur.",
++                        "Aylık toplam limit ve özellik başına limit birlikte uygulanır; hangisi önce dolarsa işlem yapılmaz. Boş alan sınırsız, 0 kapalı demektir. " +
++                            (if (AppConfig.inAppPurchase) "Kredi satın almak kişi limitini aşmaz. " else "") +
++                            "Sahip ve yönetici hesaplarının limitine yalnız klinik sahibi dokunur.",
+                         style = sys(12), color = DS.Colors.onSurfaceVariant,
+                     )
+                 }
+--- a/app/src/main/java/com/dentifay/app/credit/CreditCenterView.kt
++++ b/app/src/main/java/com/dentifay/app/credit/CreditCenterView.kt
+@@ -45,6 +45,7 @@
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.tooling.preview.Preview
+ import androidx.compose.ui.unit.dp
++import com.dentifay.app.core.AppConfig
+ import com.dentifay.app.core.Unvan
+ import com.dentifay.app.theme.DS
+ import com.dentifay.app.theme.DfyAlert
+@@ -77,6 +78,12 @@
+             people -> "Kişiler"
+             topUp -> "Yükle"
+         }
++
++    companion object {
++        /** Seçicide görünen bölümler: mağaza derlemesinde "Yükle" yok (`AppConfig.inAppPurchase`). */
++        val visible: List<CreditCenterSection>
++            get() = entries.filter { it != topUp || AppConfig.inAppPurchase }
++    }
+ }
+ 
+ /**
+@@ -88,6 +95,7 @@
+  *   Hareketler işlem defteri (kim · ne · ne zaman · kaç kredi), süzgeçli, sayfalı
+  *   Kişiler    bu ayın kişi kullanımı + aylık limitler (+ düşük bakiye uyarı eşiği)
+  *   Yükle      kredi paketi (bedel kliniğin Dentifay faturasına) · son yüklemeler · fiyat listesi
++ *              (yalnız `AppConfig.inAppPurchase`; mağaza derlemesinde krediler web panelinden alınır)
+  *
+  * Görmek `fin.credits.view` ister (varsayılan yalnız klinik sahibi). Limit düzenleme
+  * (`fin.credits.limits`) ve satın alma (`fin.credits`) ayrı yetkilerdir; sunucu her yanıtta
+@@ -221,10 +229,11 @@
+                         .navigationBarsPadding(),
+                     verticalArrangement = Arrangement.spacedBy(16.dp),
+                 ) {
++                    val sections = CreditCenterSection.visible
+                     CcSegmented(
+-                        options = CreditCenterSection.entries.map { it.label },
+-                        selected = section.ordinal,
+-                        onSelect = { section = CreditCenterSection.entries[it] },
++                        options = sections.map { it.label },
++                        selected = sections.indexOf(section).coerceAtLeast(0),
++                        onSelect = { section = sections[it] },
+                     )
+ 
+                     if (section == CreditCenterSection.overview || section == CreditCenterSection.ledger) {
+@@ -239,7 +248,10 @@
+                     }
+ 
+                     when (section) {
+-                        CreditCenterSection.overview -> Overview(store, onTopUp = { section = CreditCenterSection.topUp }) { userId ->
++                        CreditCenterSection.overview -> Overview(
++                            store,
++                            onTopUp = if (AppConfig.inAppPurchase) ({ section = CreditCenterSection.topUp }) else null,
++                        ) { userId ->
+                             store.filterUser = userId
+                             section = CreditCenterSection.ledger
+                         }
+@@ -253,11 +265,13 @@
+                             onEdit = { editing = it },
+                             onRetry = { scope.launch { store.loadPeople() } },
+                         )
+-                        CreditCenterSection.topUp -> TopUp(
+-                            store, credits, purchased,
+-                            onBuy = { confirmPack = it },
+-                            onRetry = { scope.launch { store.loadUsage() } },
+-                        )
++                        CreditCenterSection.topUp -> if (AppConfig.inAppPurchase) {
++                            TopUp(
++                                store, credits, purchased,
++                                onBuy = { confirmPack = it },
++                                onRetry = { scope.launch { store.loadUsage() } },
++                            )
++                        }
+                     }
+                 }
+             }
+@@ -287,9 +301,12 @@
+         )
+     }
+     // Satın alma: Kredi Satın Alma Koşulları okunup onaylanmadan YAPILMAZ (sunucu 428 verir).
+-    DfySheet(isPresented = confirmPack != null, onDismiss = { confirmPack = null }, containerColor = DS.Colors.background) { dismiss ->
+-        confirmPack?.let { pack ->
+-            CreditPurchaseSheet(pack = pack, onPurchased = { r -> purchaseDone(r) }, onDismiss = dismiss)
++    // Mağaza derlemesinde pencere hiç yok (`AppConfig.inAppPurchase`).
++    if (AppConfig.inAppPurchase) {
++        DfySheet(isPresented = confirmPack != null, onDismiss = { confirmPack = null }, containerColor = DS.Colors.background) { dismiss ->
++            confirmPack?.let { pack ->
++                CreditPurchaseSheet(pack = pack, onPurchased = { r -> purchaseDone(r) }, onDismiss = dismiss)
++            }
+         }
+     }
+     DfyAlert(
+@@ -360,7 +377,7 @@
+ // MARK: - Özet
+ 
+ @Composable
+-private fun Overview(store: CreditCenterStore, onTopUp: () -> Unit, onSelectUser: (String) -> Unit) {
++private fun Overview(store: CreditCenterStore, onTopUp: (() -> Unit)?, onSelectUser: (String) -> Unit) {
+     val u = store.usage
+     val error = store.usageError
+     if (u != null) {
+@@ -369,7 +386,7 @@
+             CcBanner(
+                 "exclamationmark.triangle.fill", DS.Colors.orange400,
+                 "Kullanılabilir kredi (${creditText(u.wallet.availableCredits)}) uyarı eşiğinin (${creditText(u.wallet.lowBalanceWarnCredits)}) altında.",
+-                "Kredi yükle", onTopUp,
++                onTopUp?.let { "Kredi yükle" }, onTopUp,
+             )
+         }
+         CcKpiGrid(u)
+@@ -524,7 +541,8 @@
+         CcLoadingBlock()
+     }
+ 
+-    CcFootnote("Bu ekranı varsayılan olarak yalnız klinik sahibi görür. Bir departmana açmak için web'de Ayarlar › Yetki Ayarları'nda, tek bir kişiye açmak için Ayarlar › Kullanıcı Ayarları'nda “Kredi Yönetimi'ni görüntüleme” yetkisini verin; limit düzenleme ve kredi satın alma ayrı yetkilerdir.")
++    CcFootnote("Bu ekranı varsayılan olarak yalnız klinik sahibi görür. Bir departmana açmak için web'de Ayarlar › Yetki Ayarları'nda, tek bir kişiye açmak için Ayarlar › Kullanıcı Ayarları'nda “Kredi Yönetimi'ni görüntüleme” yetkisini verin; " +
++        if (AppConfig.inAppPurchase) "limit düzenleme ve kredi satın alma ayrı yetkilerdir." else "limit düzenleme ayrı bir yetkidir.")
+ }
+ 
+ // MARK: - Yükle
+--- a/app/src/main/java/com/dentifay/app/credit/SmileCreditsView.kt
++++ b/app/src/main/java/com/dentifay/app/credit/SmileCreditsView.kt
+@@ -35,6 +35,7 @@
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.tooling.preview.Preview
+ import androidx.compose.ui.unit.dp
++import com.dentifay.app.core.AppConfig
+ import com.dentifay.app.theme.DS
+ import com.dentifay.app.theme.DfyIcon
+ import com.dentifay.app.theme.DfySheet
+@@ -139,14 +140,16 @@
+                         }
+                     }
+                     SmileTiersCard(wallet)
+-                    // Kredi paketleri
+-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+-                        Text("KREDİ PAKETLERİ", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
+-                        wallet.purchaseBlockedMessage?.let { blocked ->
+-                            SmileInfoCard(icon = "person.badge.key.fill", title = "Satın alma yetkisi", text = blocked)
+-                        }
+-                        wallet.packs.forEach { pack ->
+-                            SmilePackCard(pack, enabled = wallet.canPurchase, busy = store.isPurchasing) { confirmPack = pack }
++                    // Kredi paketleri — mağaza derlemesinde yok; krediler web panelinden alınır.
++                    if (AppConfig.inAppPurchase) {
++                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
++                            Text("KREDİ PAKETLERİ", style = sys(11, FontWeight.Bold, tracking = 1.1), color = DS.Colors.onSurfaceVariant)
++                            wallet.purchaseBlockedMessage?.let { blocked ->
++                                SmileInfoCard(icon = "person.badge.key.fill", title = "Satın alma yetkisi", text = blocked)
++                            }
++                            wallet.packs.forEach { pack ->
++                                SmilePackCard(pack, enabled = wallet.canPurchase, busy = store.isPurchasing) { confirmPack = pack }
++                            }
+                         }
+                     }
+                 } else if (error != null) {
+@@ -168,7 +171,8 @@
+                 }
+ 
+                 CreditIconLabel(
+-                    "Ödeme uygulamada alınmaz; paket bedeli ay sonunda kliniğinizin Dentifay faturasına yansır. Başarısız simülasyonun kredisi otomatik iade edilir, otomatik yerleşim düzeltmesi ücretsizdir.",
++                    (if (AppConfig.inAppPurchase) "Ödeme uygulamada alınmaz; paket bedeli ay sonunda kliniğinizin Dentifay faturasına yansır. " else "") +
++                        "Başarısız simülasyonun kredisi otomatik iade edilir, otomatik yerleşim düzeltmesi ücretsizdir.",
+                     "doc.text.fill", size = 11f, color = DS.Colors.onSurfaceVariant,
+                 )
+             }
+@@ -176,10 +180,12 @@
+     }
+ 
+     // Satın alma: Kredi Satın Alma Koşulları okunup onaylanmadan YAPILMAZ (sunucu 428 verir).
+-    // Hatalar pencerenin içinde gösterilir.
+-    DfySheet(isPresented = confirmPack != null, onDismiss = { confirmPack = null }, containerColor = DS.Colors.background) { dismiss ->
+-        confirmPack?.let { pack ->
+-            CreditPurchaseSheet(pack = pack, onPurchased = { r -> purchaseDone(r) }, onDismiss = dismiss)
++    // Hatalar pencerenin içinde gösterilir. Mağaza derlemesinde pencere hiç yok (`AppConfig.inAppPurchase`).
++    if (AppConfig.inAppPurchase) {
++        DfySheet(isPresented = confirmPack != null, onDismiss = { confirmPack = null }, containerColor = DS.Colors.background) { dismiss ->
++            confirmPack?.let { pack ->
++                CreditPurchaseSheet(pack = pack, onPurchased = { r -> purchaseDone(r) }, onDismiss = dismiss)
++            }
+         }
+     }
+ }
+--- a/app/src/main/java/com/dentifay/app/settings/SettingsView.kt
++++ b/app/src/main/java/com/dentifay/app/settings/SettingsView.kt
+@@ -172,16 +172,22 @@
+                 Group("Krediler", Modifier.appear(0.12)) {
+                     LinkRow(
+                         icon = "creditcard", title = "Krediler",
+-                        subtitle = credits.wallet?.let { "Kalan ${SmileCreditFormat.credits(it.availableCredits)} kredi · paket al" }
+-                            ?: "Kredi bakiyesi ve paketler",
++                        subtitle = if (AppConfig.inAppPurchase) {
++                            credits.wallet?.let { "Kalan ${SmileCreditFormat.credits(it.availableCredits)} kredi · paket al" }
++                                ?: "Kredi bakiyesi ve paketler"
++                        } else {
++                            // Mağaza derlemesi: satın alma yok, yalnız bakiye.
++                            credits.wallet?.let { "Kalan ${SmileCreditFormat.credits(it.availableCredits)} kredi" }
++                                ?: "Kredi bakiyesi"
++                        },
+                     ) { showCredits = true }
+-                    // Kredi Yönetimi: kim · nerede · ne kadar; kişi limitleri; kredi yükleme.
++                    // Kredi Yönetimi: kim · nerede · ne kadar; kişi limitleri; kredi yükleme (yalnız `inAppPurchase`).
+                     // Görünürlük sunucunun yetkisinden (`fin.credits.view`); asıl kapı sunucudadır.
+                     if (authManager.currentUser?.can("fin.credits.view") == true) {
+                         RowDivider()
+                         LinkRow(
+                             icon = "chart.bar.doc.horizontal", title = "Kredi Yönetimi",
+-                            subtitle = "Kullanım, kişi limitleri, kredi yükleme",
++                            subtitle = if (AppConfig.inAppPurchase) "Kullanım, kişi limitleri, kredi yükleme" else "Kullanım ve kişi limitleri",
+                         ) { showCreditCenter = true }
+                     }
+                 }
+--- a/app/src/main/java/com/dentifay/app/smile/SmileSimulationView.kt
++++ b/app/src/main/java/com/dentifay/app/smile/SmileSimulationView.kt
+@@ -65,6 +65,7 @@
+ import androidx.compose.ui.tooling.preview.Preview
+ import androidx.compose.ui.unit.dp
+ import com.dentifay.app.R
++import com.dentifay.app.core.AppConfig
+ import com.dentifay.app.smile.SmileSimulationViewModel.Job
+ import com.dentifay.app.smile.SmileSimulationViewModel.Phase
+ import com.dentifay.app.credit.CreditSheetItem
+@@ -466,7 +467,7 @@
+                     Text(
+                         if (exhausted) "Hakkınız doldu · İletişime geçin"
+                         else if (overLimit) "Aylık Limit Doldu"
+-                        else if (lacks) "Kredi Al" else "Simülasyonu oluştur",
++                        else if (lacks) lacksCreditsLabel else "Simülasyonu oluştur",
+                         style = sys(16, FontWeight.SemiBold), color = Color.White, maxLines = 1,
+                     )
+                 }
+@@ -531,7 +532,7 @@
+             text, Modifier.weight(1f), style = sys(12, FontWeight.Medium),
+             color = if (warn) DS.Colors.orange400 else DS.Colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+         )
+-        Text(if (vm.lacksCredits) "Kredi Al" else "Krediler", style = sys(12, FontWeight.Bold), color = DS.Colors.cyan400)
++        Text(if (vm.lacksCredits && AppConfig.inAppPurchase) "Kredi Al" else "Krediler", style = sys(12, FontWeight.Bold), color = DS.Colors.cyan400)
+         DfyIcon("chevron.right", size = 10.dp, tint = DS.Colors.cyan400)
+     }
+ }
+@@ -542,6 +543,10 @@
+     return "Aylık kredi limitiniz yetmiyor · kalan $kalan kredi"
+ }
+ 
++/** Kredi yetmeyince ana buton: mağaza derlemesinde satın alma yok → yalnız durumu söyler, kredi ekranını açar. */
++private val lacksCreditsLabel: String
++    get() = if (AppConfig.inAppPurchase) "Kredi Al" else "Kredi yetersiz"
++
+ private fun creditShortfallText(vm: SmileSimulationViewModel): String {
+     val have = SmileCreditsStore.shared.wallet?.let { SmileCreditFormat.credits(it.availableCredits) } ?: "0"
+     return "${vm.model.title} kalitesi ${SmileCreditFormat.credits(vm.estimatedCredits)} kredi · kalan $have"
+@@ -737,7 +742,7 @@
+         if (job.needsContact) {
+             GradientPill("Bizimle iletişime geçin", "bubble.left.and.text.bubble.right", RoundedCornerShape(DS.Radius.control)) { actions.openContact() }
+         } else if (job.needsCredits) {
+-            GradientPill("Kredi Al", "creditcard", CircleShape) { actions.openCredits(message) }
++            GradientPill(lacksCreditsLabel, "creditcard", CircleShape) { actions.openCredits(message) }
+             Row(
+                 Modifier
+                     .pressable { vm.regenerate(job.id) }

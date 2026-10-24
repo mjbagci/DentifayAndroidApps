@@ -1,0 +1,17 @@
+# Derleme çıktıları
+build/
+.gradle/
+.kotlin/
+*.apk
+*.aab
+
+# Yerel ayarlar
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Yayın imzası — ASLA repoya girmez (yedeği ayrıca saklanır)
+keystore.properties
+*.jks
+*.keystore
